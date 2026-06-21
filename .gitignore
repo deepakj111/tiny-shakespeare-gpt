@@ -19,3 +19,7 @@ venv.bak/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+
+# Data
+data/*.txt
+data/*.bin
