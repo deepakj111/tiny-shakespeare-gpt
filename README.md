@@ -3,7 +3,24 @@
 Building and training a GPT model from scratch using PyTorch on the tiny shakespeare dataset.
 
 ## Setup
-(To be added)
+
+This project uses `uv` for modern, reproducible dependency management. To sync dependencies:
+
+```bash
+uv sync
+```
+
+### Data Preparation
+
+Before training the model, you need to download the Tiny Shakespeare dataset. A script is provided to fetch the text and save it to the `data/` directory.
+
+Run the following command using `uv` to ensure it executes in the project's isolated virtual environment:
+
+```bash
+uv run python scripts/download_dataset.py
+```
+
+This will download `input.txt` (approximately 1.1MB of Shakespeare text) into the `data/` folder.
 
 ## Training
 (To be added)
