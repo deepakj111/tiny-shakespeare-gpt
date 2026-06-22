@@ -22,5 +22,11 @@ uv run python scripts/download_dataset.py
 
 This will download `input.txt` (approximately 1.1MB of Shakespeare text) into the `data/` folder.
 
+Next, tokenize the text into integer sequences and save them as binary files (`train.bin` and `val.bin`) for highly efficient loading during training:
+
+```bash
+uv run python scripts/prepare_data.py
+```
+
 ## Training
 (To be added)
