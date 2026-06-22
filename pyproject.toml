@@ -5,6 +5,10 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy>=2.4.6",
     "requests>=2.34.2",
+    "tiktoken>=0.13.0",
     "torch>=2.12.1",
     "tqdm>=4.68.3",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
