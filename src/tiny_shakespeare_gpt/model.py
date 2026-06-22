@@ -1,5 +1,5 @@
 """
-Modern GPT Architecture implementation using 2026 best practices.
+Modern GPT Architecture implementation.
 """
 from dataclasses import dataclass
 import torch
@@ -14,12 +14,12 @@ class GPTConfig:
     n_kv_head: int = 2      # Grouped-Query Attention (fewer KV heads than query heads)
     n_embd: int = 384
     dropout: float = 0.0
-    bias: bool = False      # Modern practice: no biases in linear layers/norms for speed/stability
+    bias: bool = False      # No biases in linear layers/norms for speed/stability
 
 class RMSNorm(nn.Module):
     """
     Root Mean Square Normalization.
-    Strictly faster and more stable than standard LayerNorm. Used in Llama 3 / modern LLMs.
+    Strictly faster and more stable than standard LayerNorm.
     """
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
@@ -33,3 +33,25 @@ class RMSNorm(nn.Module):
         # Cast to float32 for stable normalization, then cast back
         output = self._norm(x.float()).type_as(x)
         return output * self.weight
+
+import torch.nn.functional as F
+
+class FeedForward(nn.Module):
+    """
+    SwiGLU FeedForward Network.
+    Uses an expansion factor of 8/3, which is standard in Llama/modern LLMs.
+    """
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        hidden_dim = int(8 * config.n_embd / 3)
+        # Ensure hidden_dim is a multiple of 256 for optimal performance
+        hidden_dim = 256 * ((hidden_dim + 255) // 256)
+        
+        self.w1 = nn.Linear(config.n_embd, hidden_dim, bias=config.bias)
+        self.w2 = nn.Linear(hidden_dim, config.n_embd, bias=config.bias)
+        self.w3 = nn.Linear(config.n_embd, hidden_dim, bias=config.bias)
+        self.dropout = nn.Dropout(config.dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # SwiGLU activation: (xW1 * sigmoid(xW1)) * xW3
+        return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))

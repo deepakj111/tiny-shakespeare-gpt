@@ -9,7 +9,7 @@ class MemmapTokenDataset(Dataset):
     """
     A PyTorch Dataset that reads tokenized integer data from a memory-mapped binary file.
     Using memory-mapping ensures that huge datasets load instantly and consume 
-    almost zero RAM, which is the standard practice for large-scale LLM training.
+    almost zero RAM.
     """
     def __init__(self, file_path: str, block_size: int, dtype: np.dtype = np.uint16):
         self.data = np.memmap(file_path, dtype=dtype, mode='r')

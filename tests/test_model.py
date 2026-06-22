@@ -24,3 +24,17 @@ def test_rmsnorm():
     # RMSNorm ensures the root mean square of the output is approx 1
     rms = torch.sqrt(out.pow(2).mean(-1))
     assert torch.allclose(rms, torch.ones_like(rms), atol=1e-5)
+
+from tiny_shakespeare_gpt.model import FeedForward
+
+def test_feedforward():
+    torch.manual_seed(42)
+    config = GPTConfig(n_embd=384, dropout=0.0, bias=False)
+    ffn = FeedForward(config)
+    
+    # Create batch of shape (batch_size, seq_len, n_embd)
+    x = torch.randn(2, 128, config.n_embd)
+    out = ffn(x)
+    
+    # Output should preserve shape
+    assert out.shape == x.shape
