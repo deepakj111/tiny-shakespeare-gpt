@@ -2,6 +2,7 @@
 Modern GPT Architecture implementation.
 """
 from dataclasses import dataclass
+import math
 import torch
 import torch.nn as nn
 
@@ -55,3 +56,79 @@ class FeedForward(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # SwiGLU activation: (xW1 * sigmoid(xW1)) * xW3
         return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))
+
+def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> torch.Tensor:
+    """Precompute the frequency tensor for complex exponentials (RoPE)."""
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    t = torch.arange(end, device=freqs.device, dtype=torch.float32)
+    freqs = torch.outer(t, freqs)
+    freqs_cis = torch.polar(torch.ones_like(freqs), freqs)
+    return freqs_cis
+
+def apply_rotary_emb(
+    xq: torch.Tensor, 
+    xk: torch.Tensor, 
+    freqs_cis: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Apply Rotary Position Embeddings to query and key tensors."""
+    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
+    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
+    
+    # freqs_cis shape: (seq_len, head_dim/2) -> (1, seq_len, 1, head_dim/2)
+    freqs_cis = freqs_cis.unsqueeze(0).unsqueeze(2)
+    
+    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
+    xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
+    
+    return xq_out.type_as(xq), xk_out.type_as(xk)
+
+class CausalSelfAttention(nn.Module):
+    """
+    Multi-Head Causal Self Attention with Grouped Query Attention (GQA)
+    and Rotary Position Embeddings (RoPE).
+    """
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        assert config.n_embd % config.n_head == 0
+        self.n_head = config.n_head
+        self.n_kv_head = config.n_kv_head
+        self.n_rep = self.n_head // self.n_kv_head
+        self.head_dim = config.n_embd // config.n_head
+        
+        self.wq = nn.Linear(config.n_embd, config.n_head * self.head_dim, bias=config.bias)
+        self.wk = nn.Linear(config.n_embd, config.n_kv_head * self.head_dim, bias=config.bias)
+        self.wv = nn.Linear(config.n_embd, config.n_kv_head * self.head_dim, bias=config.bias)
+        self.wo = nn.Linear(config.n_head * self.head_dim, config.n_embd, bias=config.bias)
+        
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+
+    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+        B, T, C = x.shape
+        
+        xq = self.wq(x).view(B, T, self.n_head, self.head_dim)
+        xk = self.wk(x).view(B, T, self.n_kv_head, self.head_dim)
+        xv = self.wv(x).view(B, T, self.n_kv_head, self.head_dim)
+        
+        xq, xk = apply_rotary_emb(xq, xk, freqs_cis)
+        
+        # Expand KV heads to match query heads for GQA
+        if self.n_kv_head < self.n_head:
+            xk = xk.repeat_interleave(self.n_rep, dim=2)
+            xv = xv.repeat_interleave(self.n_rep, dim=2)
+            
+        # Transpose to (B, n_head, T, head_dim)
+        xq = xq.transpose(1, 2)
+        xk = xk.transpose(1, 2)
+        xv = xv.transpose(1, 2)
+        
+        # Flash attention
+        y = F.scaled_dot_product_attention(
+            xq, xk, xv, 
+            attn_mask=None,
+            dropout_p=self.attn_dropout.p if self.training else 0.0,
+            is_causal=True
+        )
+        
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        return self.resid_dropout(self.wo(y))
