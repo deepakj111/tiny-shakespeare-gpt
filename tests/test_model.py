@@ -70,3 +70,43 @@ def test_causal_self_attention():
     out = attn(x, freqs_cis)
     
     assert out.shape == x.shape
+
+from tiny_shakespeare_gpt.model import Block, GPT
+
+def test_block():
+    torch.manual_seed(42)
+    config = GPTConfig(n_embd=128, n_head=4, n_kv_head=2, dropout=0.0, bias=False)
+    block = Block(config)
+    
+    seq_len = 64
+    x = torch.randn(2, seq_len, config.n_embd)
+    freqs_cis = precompute_freqs_cis(config.n_embd // config.n_head, seq_len)
+    
+    out = block(x, freqs_cis)
+    assert out.shape == x.shape
+
+def test_gpt():
+    torch.manual_seed(42)
+    # small config for quick testing
+    config = GPTConfig(vocab_size=100, n_embd=128, n_layer=2, n_head=4, n_kv_head=2)
+    model = GPT(config)
+    
+    # Check weight tying
+    assert torch.all(model.tok_emb.weight == model.lm_head.weight)
+    
+    # Test forward pass without targets
+    idx = torch.randint(0, config.vocab_size, (2, 64))
+    logits, loss = model(idx)
+    
+    # logits shape should be (B, 1, vocab_size) during inference
+    assert logits.shape == (2, 1, config.vocab_size)
+    assert loss is None
+    
+    # Test forward pass with targets
+    targets = torch.randint(0, config.vocab_size, (2, 64))
+    logits, loss = model(idx, targets=targets)
+    
+    # logits shape should be (B, T, vocab_size) during training
+    assert logits.shape == (2, 64, config.vocab_size)
+    assert loss is not None
+    assert loss.item() > 0

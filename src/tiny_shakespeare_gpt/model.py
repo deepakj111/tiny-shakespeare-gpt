@@ -132,3 +132,75 @@ class CausalSelfAttention(nn.Module):
         
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         return self.resid_dropout(self.wo(y))
+
+class Block(nn.Module):
+    """Transformer Block containing Self-Attention and FeedForward networks."""
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        self.norm1 = RMSNorm(config.n_embd)
+        self.attn = CausalSelfAttention(config)
+        self.norm2 = RMSNorm(config.n_embd)
+        self.mlp = FeedForward(config)
+
+    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+        x = x + self.attn(self.norm1(x), freqs_cis)
+        x = x + self.mlp(self.norm2(x))
+        return x
+
+class GPT(nn.Module):
+    """The main GPT Model."""
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        self.config = config
+        
+        self.tok_emb = nn.Embedding(config.vocab_size, config.n_embd)
+        self.dropout = nn.Dropout(config.dropout)
+        
+        self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
+        self.norm = RMSNorm(config.n_embd)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        
+        # Weight tying: share weights between token embeddings and lm head
+        self.tok_emb.weight = self.lm_head.weight
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def forward(
+        self, 
+        idx: torch.Tensor, 
+        targets: torch.Tensor = None
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        B, T = idx.shape
+        
+        # Token embeddings
+        x = self.tok_emb(idx)
+        x = self.dropout(x)
+        
+        # Precompute rotary embeddings for the sequence length
+        head_dim = self.config.n_embd // self.config.n_head
+        freqs_cis = precompute_freqs_cis(head_dim, T).to(x.device)
+        
+        # Pass through transformer blocks
+        for block in self.blocks:
+            x = block(x, freqs_cis)
+            
+        x = self.norm(x)
+        
+        if targets is not None:
+            # If we are given some desired targets, calculate the loss
+            logits = self.lm_head(x)
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+        else:
+            # Inference-time optimization: only forward the lm_head on the last position
+            logits = self.lm_head(x[:, [-1], :]) # using list [-1] to preserve the time dim
+            loss = None
+            
+        return logits, loss
