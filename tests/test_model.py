@@ -110,3 +110,28 @@ def test_gpt():
     assert logits.shape == (2, 64, config.vocab_size)
     assert loss is not None
     assert loss.item() > 0
+
+def test_configure_optimizers():
+    config = GPTConfig(vocab_size=100, n_embd=128, n_layer=2, n_head=4, n_kv_head=2, bias=True)
+    model = GPT(config)
+    
+    optimizer = model.configure_optimizers(weight_decay=0.1, learning_rate=1e-3, betas=(0.9, 0.999), device_type='cpu')
+    assert isinstance(optimizer, torch.optim.AdamW)
+    
+    # Check that there are two parameter groups (decay and no decay)
+    assert len(optimizer.param_groups) == 2
+    
+def test_generate():
+    torch.manual_seed(42)
+    config = GPTConfig(vocab_size=100, n_embd=64, n_layer=1, n_head=2, n_kv_head=1)
+    model = GPT(config)
+    model.eval()
+    
+    # Provide a starting sequence of 4 tokens for 2 sequences in a batch
+    idx = torch.randint(0, config.vocab_size, (2, 4))
+    
+    # Generate 5 new tokens
+    out = model.generate(idx, max_new_tokens=5, top_k=5)
+    
+    # Output should have 4 + 5 = 9 tokens
+    assert out.shape == (2, 9)
