@@ -29,4 +29,26 @@ uv run python scripts/prepare_data.py
 ```
 
 ## Training
-(To be added)
+
+Once the data is prepared, you can start the training loop. The training script will initialize the model architecture, setup the optimizer, and begin training on the tiny shakespeare dataset.
+
+Run the following command:
+
+```bash
+uv run python scripts/train.py
+```
+
+The script will periodically evaluate the model on the training and validation sets and print the losses. By default, it runs for a quick 500 steps, but you can adjust `max_iters`, `block_size`, and `batch_size` in the script for longer training. Upon completion, a checkpoint is saved in the `out/` directory.
+
+## Features
+
+This implementation includes several architectural improvements commonly found in state-of-the-art language models:
+
+- **Rotary Position Embeddings (RoPE)**: Replaces absolute positional embeddings with relative ones for better generalization.
+- **Grouped-Query Attention (GQA)**: Reduces the number of key/value heads for faster inference and lower memory consumption.
+- **RMSNorm**: A strictly faster and more stable alternative to standard LayerNorm.
+- **SwiGLU FeedForward**: Replaces the standard ReLU/GELU MLPs with Swish-Gated Linear Units.
+- **Flash Attention**: Uses PyTorch's scaled dot product attention for highly optimized, memory-efficient exact attention.
+- **Weight Tying**: Shares weights between the token embedding layer and the final output layer.
+
+For more details on the design, see [ARCHITECTURE.md](ARCHITECTURE.md).
