@@ -1,5 +1,5 @@
 """
-Modern GPT Architecture implementation.
+GPT Architecture implementation.
 """
 from dataclasses import dataclass
 import inspect
@@ -41,7 +41,7 @@ import torch.nn.functional as F
 class FeedForward(nn.Module):
     """
     SwiGLU FeedForward Network.
-    Uses an expansion factor of 8/3, which is standard in Llama/modern LLMs.
+    Uses an expansion factor of 8/3, which is standard in Llama/other LLMs.
     """
     def __init__(self, config: GPTConfig):
         super().__init__()
