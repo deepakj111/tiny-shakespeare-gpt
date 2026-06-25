@@ -36,5 +36,14 @@ The input token embedding layer (`tok_emb`) and the final output linear projecti
 ### Optimizer Settings
 The optimizer of choice is **AdamW**, specifically utilizing the fused implementation (`fused=True`) when running on CUDA. The weight decay is properly isolated: it is applied only to multi-dimensional weight matrices (like Linear layers and Embeddings) and explicitly disabled for 1D tensors (like RMSNorm weights).
 
+### Mixed Precision & Bfloat16
+The training loop utilizes PyTorch's `autocast` context manager. If supported by the GPU hardware, it defaults to `bfloat16` (Brain Floating Point), which provides the same dynamic range as `float32` while halving the memory requirement and significantly accelerating matrix multiplications on Tensor Cores.
+
+### Learning Rate Scheduler
+A **Cosine Annealing** learning rate scheduler is implemented, complete with a linear warmup phase. This prevents early divergence by slowly ramping up the learning rate, then smoothly decays it to a minimum threshold, optimizing convergence in the later stages of training.
+
+### Gradient Accumulation & Clipping
+To allow for training with large effective batch sizes on limited VRAM hardware, **Gradient Accumulation** is used. Instead of updating weights every micro-batch, gradients are accumulated and stepped after several micro-batches. Additionally, **Gradient Clipping** (`clip_grad_norm_`) is applied just before the optimizer step to maintain stability and prevent exploding gradients.
+
 ### Dataset Loading
 To avoid loading the entire dataset into RAM, the project uses NumPy's `memmap` to read the tokenized integer data directly from the binary files (`train.bin`, `val.bin`). This results in instantaneous startup times and zero memory overhead.

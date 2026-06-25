@@ -42,7 +42,7 @@ The script will periodically evaluate the model on the training and validation s
 
 ## Features
 
-This implementation includes several architectural improvements commonly found in state-of-the-art language models:
+### Architecture Improvements
 
 - **Rotary Position Embeddings (RoPE)**: Replaces absolute positional embeddings with relative ones for better generalization.
 - **Grouped-Query Attention (GQA)**: Reduces the number of key/value heads for faster inference and lower memory consumption.
@@ -50,5 +50,12 @@ This implementation includes several architectural improvements commonly found i
 - **SwiGLU FeedForward**: Replaces the standard ReLU/GELU MLPs with Swish-Gated Linear Units.
 - **Flash Attention**: Uses PyTorch's scaled dot product attention for highly optimized, memory-efficient exact attention.
 - **Weight Tying**: Shares weights between the token embedding layer and the final output layer.
+
+### Training Optimizations
+
+- **Mixed Precision Training**: Uses PyTorch `autocast` with `bfloat16` (or `float16`) to speed up training and reduce memory usage without losing stability.
+- **Cosine Learning Rate Scheduler**: Implements a cosine annealing schedule with a linear warmup phase for stable and effective convergence.
+- **Gradient Accumulation**: Decouples effective batch size from VRAM limits.
+- **Gradient Clipping**: Prevents exploding gradients during training.
 
 For more details on the design, see [ARCHITECTURE.md](ARCHITECTURE.md).
