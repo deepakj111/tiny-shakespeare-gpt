@@ -40,6 +40,18 @@ uv run python scripts/train.py
 
 The script will periodically evaluate the model on the training and validation sets and print the losses. By default, it runs for a quick 500 steps, but you can adjust `max_iters`, `block_size`, and `batch_size` in the script for longer training. Upon completion, a checkpoint is saved in the `out/` directory.
 
+## Generation
+
+After the model has been trained and a checkpoint is saved, you can use it to generate new Shakespeare-like text.
+
+Run the generation script:
+
+```bash
+uv run python scripts/generate.py
+```
+
+This script loads the latest checkpoint from the `out/` directory, initializes the model and tokenizer, and samples new text. You can edit the script to change parameters such as `max_new_tokens`, `temperature`, and `top_k` to experiment with different output styles.
+
 ## Features
 
 ### Architecture Improvements
