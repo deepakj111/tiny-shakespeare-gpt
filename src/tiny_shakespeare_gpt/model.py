@@ -103,8 +103,9 @@ class CausalSelfAttention(nn.Module):
         
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
+        self.max_seq_len = config.block_size
 
-    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor, start_pos: int = 0, use_cache: bool = False) -> torch.Tensor:
         B, T, C = x.shape
         
         xq = self.wq(x).view(B, T, self.n_head, self.head_dim)
@@ -112,6 +113,18 @@ class CausalSelfAttention(nn.Module):
         xv = self.wv(x).view(B, T, self.n_kv_head, self.head_dim)
         
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis)
+        
+        if use_cache:
+            if start_pos == 0 or not hasattr(self, 'cache_k'):
+                # Initialize cache lazily
+                self.cache_k = torch.zeros((B, self.max_seq_len, self.n_kv_head, self.head_dim), dtype=xk.dtype, device=xk.device)
+                self.cache_v = torch.zeros((B, self.max_seq_len, self.n_kv_head, self.head_dim), dtype=xv.dtype, device=xv.device)
+                
+            self.cache_k[:B, start_pos:start_pos+T] = xk
+            self.cache_v[:B, start_pos:start_pos+T] = xv
+            
+            xk = self.cache_k[:B, :start_pos+T]
+            xv = self.cache_v[:B, :start_pos+T]
         
         # Expand KV heads to match query heads for GQA
         if self.n_kv_head < self.n_head:
@@ -128,7 +141,7 @@ class CausalSelfAttention(nn.Module):
             xq, xk, xv, 
             attn_mask=None,
             dropout_p=self.attn_dropout.p if self.training else 0.0,
-            is_causal=True
+            is_causal=(T > 1)
         )
         
         y = y.transpose(1, 2).contiguous().view(B, T, C)
@@ -143,8 +156,8 @@ class Block(nn.Module):
         self.norm2 = RMSNorm(config.n_embd)
         self.mlp = FeedForward(config)
 
-    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.norm1(x), freqs_cis)
+    def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor, start_pos: int = 0, use_cache: bool = False) -> torch.Tensor:
+        x = x + self.attn(self.norm1(x), freqs_cis, start_pos, use_cache)
         x = x + self.mlp(self.norm2(x))
         return x
 
@@ -164,6 +177,11 @@ class GPT(nn.Module):
         # Weight tying: share weights between token embeddings and lm head
         self.tok_emb.weight = self.lm_head.weight
 
+        # Precompute rotary embeddings
+        head_dim = config.n_embd // config.n_head
+        freqs_cis = precompute_freqs_cis(head_dim, config.block_size)
+        self.register_buffer("freqs_cis", freqs_cis, persistent=False)
+
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
@@ -177,7 +195,9 @@ class GPT(nn.Module):
     def forward(
         self, 
         idx: torch.Tensor, 
-        targets: torch.Tensor = None
+        targets: torch.Tensor = None,
+        start_pos: int = 0,
+        use_cache: bool = False
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         B, T = idx.shape
         
@@ -185,13 +205,12 @@ class GPT(nn.Module):
         x = self.tok_emb(idx)
         x = self.dropout(x)
         
-        # Precompute rotary embeddings for the sequence length
-        head_dim = self.config.n_embd // self.config.n_head
-        freqs_cis = precompute_freqs_cis(head_dim, T).to(x.device)
+        # Slice rotary embeddings for the current sequence length
+        freqs_cis = self.freqs_cis[start_pos : start_pos + T]
         
         # Pass through transformer blocks
         for block in self.blocks:
-            x = block(x, freqs_cis)
+            x = block(x, freqs_cis, start_pos, use_cache)
             
         x = self.norm(x)
         
@@ -232,23 +251,47 @@ class GPT(nn.Module):
     def generate(self, idx: torch.Tensor, max_new_tokens: int, temperature: float = 1.0, top_k: int = None) -> torch.Tensor:
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
+        the sequence max_new_tokens times, using KV caching.
         """
-        for _ in range(max_new_tokens):
-            # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
-            # forward the model to get the logits for the index in the sequence
-            logits, _ = self(idx_cond)
-            # pluck the logits at the final step and scale by desired temperature
-            logits = logits[:, -1, :] / temperature
-            # optionally crop the logits to only the top k options
+        B, T = idx.shape
+        
+        # Process the prompt (prefill)
+        if T > self.config.block_size:
+            idx = idx[:, -self.config.block_size:]
+            T = idx.shape[1]
+            
+        logits, _ = self(idx, start_pos=0, use_cache=True)
+        
+        next_token_logits = logits[:, -1, :] / temperature
+        if top_k is not None:
+            v, _ = torch.topk(next_token_logits, min(top_k, next_token_logits.size(-1)))
+            next_token_logits[next_token_logits < v[:, [-1]]] = -float('Inf')
+        probs = F.softmax(next_token_logits, dim=-1)
+        idx_next = torch.multinomial(probs, num_samples=1)
+        
+        generated_ids = [idx_next]
+        start_pos = T
+        
+        for _ in range(1, max_new_tokens):
+            if start_pos >= self.config.block_size:
+                break # exceeded maximum context length
+                
+            logits, _ = self(idx_next, start_pos=start_pos, use_cache=True)
+            
+            next_token_logits = logits[:, -1, :] / temperature
             if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
-            # apply softmax to convert logits to (normalized) probabilities
-            probs = F.softmax(logits, dim=-1)
-            # sample from the distribution
+                v, _ = torch.topk(next_token_logits, min(top_k, next_token_logits.size(-1)))
+                next_token_logits[next_token_logits < v[:, [-1]]] = -float('Inf')
+            probs = F.softmax(next_token_logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
-            # append sampled index to the running sequence and continue
-            idx = torch.cat((idx, idx_next), dim=1)
-        return idx
+            
+            generated_ids.append(idx_next)
+            start_pos += 1
+            
+        # Clear cache
+        for block in self.blocks:
+            if hasattr(block.attn, 'cache_k'):
+                del block.attn.cache_k
+                del block.attn.cache_v
+                
+        return torch.cat([idx] + generated_ids, dim=1)

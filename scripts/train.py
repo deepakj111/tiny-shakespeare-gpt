@@ -46,6 +46,9 @@ def get_lr(it, max_iters, learning_rate, warmup_iters, min_lr):
     return min_lr + coeff * (learning_rate - min_lr)
 
 def main():
+    # Performance settings
+    torch.set_float32_matmul_precision('high')
+    
     # Basic configuration
     batch_size = 12
     block_size = 256
@@ -99,6 +102,10 @@ def main():
     )
     model = GPT(config)
     model.to(device)
+    
+    if device == 'cuda':
+        print("Compiling model...")
+        model = torch.compile(model)
 
     # Optimizer
     optimizer = model.configure_optimizers(weight_decay=1e-1, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
