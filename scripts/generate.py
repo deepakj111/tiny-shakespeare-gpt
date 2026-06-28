@@ -7,12 +7,20 @@ from tiny_shakespeare_gpt.model import GPT, GPTConfig
 from tiny_shakespeare_gpt.tokenizer import BPETokenizer
 
 def main():
-    # Generation settings
-    start_prompt = "\n"  # starting prompt (can be empty or custom string)
-    max_new_tokens = 500 # number of tokens to generate
-    temperature = 0.8    # 1.0 is default, lower is more conservative, higher is more diverse
-    top_k = 200          # retain only the top_k most likely tokens
-    seed = 1337
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate text using trained GPT model.")
+    parser.add_argument("--prompt", type=str, default="\n", help="Starting prompt for generation")
+    parser.add_argument("--max_new_tokens", type=int, default=500, help="Number of tokens to generate")
+    parser.add_argument("--temperature", type=float, default=0.8, help="Temperature for sampling")
+    parser.add_argument("--top_k", type=int, default=200, help="Top-k sampling threshold")
+    parser.add_argument("--seed", type=int, default=1337, help="Random seed")
+    args = parser.parse_args()
+
+    start_prompt = args.prompt
+    max_new_tokens = args.max_new_tokens
+    temperature = args.temperature
+    top_k = args.top_k
+    seed = args.seed
 
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
