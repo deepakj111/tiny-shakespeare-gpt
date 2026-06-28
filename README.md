@@ -38,7 +38,7 @@ Run the following command:
 uv run python scripts/train.py
 ```
 
-The script will periodically evaluate the model on the training and validation sets and print the losses. By default, it runs for a quick 500 steps, but you can adjust `max_iters`, `block_size`, and `batch_size` in the script for longer training. Upon completion, a checkpoint is saved in the `out/` directory.
+The script will periodically evaluate the model on the training and validation sets and print the losses. By default, it runs for a quick 500 steps, but you can adjust `max_iters`, `block_size`, and `batch_size` in the script for longer training. During training, the model tracks validation loss and saves the best checkpoint in the `out/` directory.
 
 ## Generation
 
@@ -62,6 +62,8 @@ This script loads the latest checkpoint from the `out/` directory, initializes t
 - **SwiGLU FeedForward**: Replaces the standard ReLU/GELU MLPs with Swish-Gated Linear Units.
 - **Flash Attention**: Uses PyTorch's scaled dot product attention for highly optimized, memory-efficient exact attention.
 - **Weight Tying**: Shares weights between the token embedding layer and the final output layer.
+- **Residual Scaling**: Custom initialization (`1/sqrt(2 * n_layer)`) on residual projections to prevent variance explosion.
+- **Vocabulary Padding**: Pads the GPT-2 vocabulary to a multiple of 64 for optimal Tensor Core hardware utilization.
 
 ### Training Optimizations
 
@@ -69,5 +71,6 @@ This script loads the latest checkpoint from the `out/` directory, initializes t
 - **Cosine Learning Rate Scheduler**: Implements a cosine annealing schedule with a linear warmup phase for stable and effective convergence.
 - **Gradient Accumulation**: Decouples effective batch size from VRAM limits.
 - **Gradient Clipping**: Prevents exploding gradients during training.
+- **Checkpoint Tracking**: Automatically tracks and saves only the model checkpoint with the best validation loss.
 
 For more details on the design, see [ARCHITECTURE.md](ARCHITECTURE.md).
