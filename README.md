@@ -52,6 +52,13 @@ uv run python scripts/generate.py
 
 This script loads the latest checkpoint from the `out/` directory, initializes the model and tokenizer, and samples new text. You can edit the script to change parameters such as `max_new_tokens`, `temperature`, and `top_k` to experiment with different output styles.
 
+## Limitations & Model Scope
+
+It is important to understand what this model is and what it is not:
+
+- **It is a Base Foundational Model:** This model is trained purely on the objective of **next-token prediction** using a raw, unstructured dataset (Tiny Shakespeare). 
+- **It is NOT Conversational:** The model has not undergone Supervised Fine-Tuning (SFT) on question-and-answer pairs, nor has it been optimized with Reinforcement Learning from Human Feedback (RLHF). Because of this, it does not act like an "assistant" or a chatbot. If you prompt it with a question, it will not necessarily answer it; instead, it will simply attempt to continue the text in the style of a Shakespearean play.
+- **It is Small and Undertrained:** Being an educational portfolio project, the model has a very low parameter count and is trained on a tiny corpus (~1MB) for a minimal number of steps. While it effectively learns the syntax, formatting, and vocabulary of Shakespeare, it does not possess deep semantic logic, factual knowledge, or long-term coherence.
 ## Features
 
 ### Architecture Improvements
