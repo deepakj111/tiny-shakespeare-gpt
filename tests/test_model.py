@@ -4,8 +4,8 @@ from tiny_shakespeare_gpt.model import GPTConfig, RMSNorm
 def test_gpt_config():
     config = GPTConfig()
     
-    # Check default modern attributes exist
-    assert config.vocab_size == 50257
+    # Check default attributes exist
+    assert config.vocab_size == 50304
     assert config.n_layer == 6
     assert config.bias is False
 

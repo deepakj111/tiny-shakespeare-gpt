@@ -10,7 +10,7 @@ import torch.nn as nn
 @dataclass
 class GPTConfig:
     block_size: int = 1024
-    vocab_size: int = 50257 # GPT-2 vocab size
+    vocab_size: int = 50304 # GPT-2 vocab size padded to a multiple of 64 for efficiency
     n_layer: int = 6
     n_head: int = 6
     n_kv_head: int = 2      # Grouped-Query Attention (fewer KV heads than query heads)
@@ -183,6 +183,11 @@ class GPT(nn.Module):
         self.register_buffer("freqs_cis", freqs_cis, persistent=False)
 
         self.apply(self._init_weights)
+
+        # Apply special scaled init to the residual projections
+        for pn, p in self.named_parameters():
+            if pn.endswith('wo.weight') or pn.endswith('w2.weight'):
+                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * config.n_layer))
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):

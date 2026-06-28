@@ -4,8 +4,9 @@ This document outlines the design decisions and architectural components used in
 
 ## Core Components
 
-### 1. Tokenization
-The project uses Byte-Pair Encoding (BPE) provided by OpenAI's `tiktoken` library. By default, it employs the `gpt2` vocabulary (vocab size 50257). This is highly efficient and standard for GPT-style implementations, providing a good balance between vocabulary size and sequence length.
+### 1. Tokenization and Vocabulary
+The project uses Byte-Pair Encoding (BPE) provided by OpenAI's `tiktoken` library. By default, it employs the `gpt2` vocabulary. However, the vocabulary size is padded from 50257 to 50304 (a multiple of 64). 
+- **Why**: Padding the vocabulary to a multiple of 64 ensures optimal hardware utilization on NVIDIA GPUs (Tensor Cores), leading to faster training times without impacting model quality.
 
 ### 2. Normalization (RMSNorm)
 Instead of standard Layer Normalization (`nn.LayerNorm`), this architecture uses Root Mean Square Normalization (**RMSNorm**).
@@ -27,9 +28,10 @@ The standard MLP block is replaced with a **SwiGLU** (Swish-Gated Linear Unit) n
 - **Why**: Instead of `ReLU(x * W1) * W2`, SwiGLU uses a gating mechanism: `(x * W1 * Swish(x * W1)) * W3`. This has been shown to yield better performance per parameter.
 - **Sizing**: We use a hidden dimension expansion factor of `8/3` (rounded to a multiple of 256 for optimal hardware utilization), rather than the traditional factor of `4`.
 
-### 6. Weight Tying
-The input token embedding layer (`tok_emb`) and the final output linear projection (`lm_head`) share the same underlying weight matrix.
-- **Why**: This saves a massive number of parameters (e.g., `vocab_size * n_embd`), acting as a regularizer and making the model more memory-efficient without sacrificing quality.
+### 6. Weight Initialization and Tying
+The model employs a custom scaled initialization strategy to maintain stability.
+- **Residual Scaling**: The residual projections (the final linear layers in the attention and feed-forward blocks) are initialized with a standard deviation scaled by `1/sqrt(2 * n_layer)`. This prevents variance explosion deep in the network.
+- **Weight Tying**: The input token embedding layer (`tok_emb`) and the final output linear projection (`lm_head`) share the same underlying weight matrix. This saves a massive number of parameters (e.g., `vocab_size * n_embd`), acting as a regularizer and making the model more memory-efficient without sacrificing quality.
 
 ## Training Optimizations
 

@@ -93,7 +93,6 @@ def main():
     # Model
     config = GPTConfig(
         block_size=block_size,
-        vocab_size=50257,
         n_layer=4,
         n_head=4,
         n_kv_head=2,
@@ -112,6 +111,9 @@ def main():
 
     # Training loop
     train_iter = iter(train_loader)
+    best_val_loss = float('inf')
+    out_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "out")
+    os.makedirs(out_dir, exist_ok=True)
     
     for step in range(max_iters):
         # Update learning rate
@@ -123,6 +125,19 @@ def main():
         if step % eval_interval == 0 or step == max_iters - 1:
             losses = estimate_loss(model, train_loader, val_loader, eval_iters, device, ctx)
             print(f"Step {step}: Train loss {losses['train']:.4f}, Val loss {losses['val']:.4f}, LR: {lr:.4e}")
+            
+            if losses['val'] < best_val_loss:
+                best_val_loss = losses['val']
+                ckpt_path = os.path.join(out_dir, "ckpt.pt")
+                checkpoint = {
+                    'model': model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'config': config,
+                    'iter_num': step,
+                    'best_val_loss': best_val_loss,
+                }
+                torch.save(checkpoint, ckpt_path)
+                print(f"Saved new best model with val loss {best_val_loss:.4f} to {ckpt_path}")
 
         # Training phase with gradient accumulation
         optimizer.zero_grad(set_to_none=True)
@@ -144,20 +159,6 @@ def main():
         optimizer.step()
 
     print("Training complete.")
-
-    # Save a comprehensive checkpoint
-    out_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "out")
-    os.makedirs(out_dir, exist_ok=True)
-    ckpt_path = os.path.join(out_dir, "ckpt.pt")
-    
-    checkpoint = {
-        'model': model.state_dict(),
-        'optimizer': optimizer.state_dict(),
-        'config': config,
-        'iter_num': max_iters,
-    }
-    torch.save(checkpoint, ckpt_path)
-    print(f"Model saved to {ckpt_path}")
 
 if __name__ == "__main__":
     main()
