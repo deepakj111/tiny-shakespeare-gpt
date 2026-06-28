@@ -30,6 +30,7 @@ def main():
         return
 
     print(f"Loading checkpoint from {ckpt_path}")
+    torch.serialization.add_safe_globals([GPTConfig])
     checkpoint = torch.load(ckpt_path, map_location=device, weights_only=True)
     
     # Initialize model from checkpoint config
