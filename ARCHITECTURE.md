@@ -6,11 +6,11 @@ This document outlines the design decisions and architectural components used in
 
 ### 1. Tokenization and Vocabulary
 The project uses Byte-Pair Encoding (BPE) provided by OpenAI's `tiktoken` library. By default, it employs the `gpt2` vocabulary. However, the vocabulary size is padded from 50257 to 50304 (a multiple of 64). 
-- **Why**: Padding the vocabulary to a multiple of 64 ensures optimal hardware utilization on NVIDIA GPUs (Tensor Cores), leading to faster training times without impacting model quality.
+- **Why**: Padding the vocabulary to a multiple of 64 ensures hardware utilization on NVIDIA GPUs (Tensor Cores), leading to faster training times without impacting model quality.
 
 ### 2. Normalization (RMSNorm)
 Instead of standard Layer Normalization (`nn.LayerNorm`), this architecture uses Root Mean Square Normalization (**RMSNorm**).
-- **Why**: RMSNorm drops the mean-centering operation, relying only on variance scaling. This makes it strictly faster while maintaining identical training stability and convergence properties.
+- **Why**: RMSNorm drops the mean-centering operation, relying only on variance scaling. This makes it faster while maintaining identical training stability and convergence properties.
 - **Biases**: Biases are completely removed from the normalization layers.
 
 ### 3. Positional Embeddings (RoPE)
@@ -26,7 +26,7 @@ The attention block incorporates two major optimizations:
 ### 5. FeedForward Network (SwiGLU)
 The standard MLP block is replaced with a **SwiGLU** (Swish-Gated Linear Unit) network.
 - **Why**: Instead of `ReLU(x * W1) * W2`, SwiGLU uses a gating mechanism: `(x * W1 * Swish(x * W1)) * W3`. This has been shown to yield better performance per parameter.
-- **Sizing**: We use a hidden dimension expansion factor of `8/3` (rounded to a multiple of 256 for optimal hardware utilization), rather than the traditional factor of `4`.
+- **Sizing**: We use a hidden dimension expansion factor of `8/3` (rounded to a multiple of 256), rather than the traditional factor of `4`.
 
 ### 6. Weight Initialization and Tying
 The model employs a custom scaled initialization strategy to maintain stability.

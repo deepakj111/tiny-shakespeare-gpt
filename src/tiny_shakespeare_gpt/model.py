@@ -21,7 +21,6 @@ class GPTConfig:
 class RMSNorm(nn.Module):
     """
     Root Mean Square Normalization.
-    Strictly faster and more stable than standard LayerNorm.
     """
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
@@ -46,7 +45,7 @@ class FeedForward(nn.Module):
     def __init__(self, config: GPTConfig):
         super().__init__()
         hidden_dim = int(8 * config.n_embd / 3)
-        # Ensure hidden_dim is a multiple of 256 for optimal performance
+        # Ensure hidden_dim is a multiple of 256
         hidden_dim = 256 * ((hidden_dim + 255) // 256)
         
         self.w1 = nn.Linear(config.n_embd, hidden_dim, bias=config.bias)

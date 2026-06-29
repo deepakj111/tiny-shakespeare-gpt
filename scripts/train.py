@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 
 from tiny_shakespeare_gpt.model import GPT, GPTConfig
 from tiny_shakespeare_gpt.dataset import MemmapTokenDataset
+from tiny_shakespeare_gpt.config import TrainConfig
 
 def get_batch(loader_iter, loader):
     try:
@@ -35,33 +36,21 @@ def estimate_loss(model, train_loader, val_loader, eval_iters, device, ctx):
     model.train()
     return out
 
-def get_lr(it, max_iters, learning_rate, warmup_iters, min_lr):
-    if it < warmup_iters:
-        return learning_rate * it / max(1, warmup_iters)
-    if it > max_iters:
-        return min_lr
-    decay_ratio = (it - warmup_iters) / (max_iters - warmup_iters)
+def get_lr(it, train_config):
+    if it < train_config.warmup_iters:
+        return train_config.learning_rate * it / max(1, train_config.warmup_iters)
+    if it > train_config.max_iters:
+        return train_config.min_lr
+    decay_ratio = (it - train_config.warmup_iters) / (train_config.max_iters - train_config.warmup_iters)
     assert 0 <= decay_ratio <= 1
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-    return min_lr + coeff * (learning_rate - min_lr)
+    return train_config.min_lr + coeff * (train_config.learning_rate - train_config.min_lr)
 
 def main():
+    train_config = TrainConfig()
+
     # Performance settings
     torch.set_float32_matmul_precision('high')
-    
-    # Basic configuration
-    batch_size = 12
-    block_size = 256
-    max_iters = 500
-    eval_interval = 100
-    eval_iters = 20
-    
-    # Optimization configurations
-    learning_rate = 1e-3
-    min_lr = 1e-4
-    warmup_iters = 100
-    grad_clip = 1.0
-    gradient_accumulation_steps = 4 # simulate larger batch size
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
@@ -84,22 +73,22 @@ def main():
         print("Data not found. Please run scripts/prepare_data.py first.")
         return
 
-    train_dataset = MemmapTokenDataset(train_data_path, block_size)
-    val_dataset = MemmapTokenDataset(val_data_path, block_size)
+    train_dataset = MemmapTokenDataset(train_data_path, train_config.block_size)
+    val_dataset = MemmapTokenDataset(val_data_path, train_config.block_size)
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=train_config.batch_size, shuffle=True, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=train_config.batch_size, shuffle=False, pin_memory=True)
 
     # Model
-    config = GPTConfig(
-        block_size=block_size,
-        n_layer=4,
-        n_head=4,
-        n_kv_head=2,
-        n_embd=128,
-        dropout=0.0,
+    model_config = GPTConfig(
+        block_size=train_config.block_size,
+        n_layer=train_config.n_layer,
+        n_head=train_config.n_head,
+        n_kv_head=train_config.n_kv_head,
+        n_embd=train_config.n_embd,
+        dropout=train_config.dropout,
     )
-    model = GPT(config)
+    model = GPT(model_config)
     model.to(device)
     
     if device == 'cuda':
@@ -107,7 +96,7 @@ def main():
         model = torch.compile(model)
 
     # Optimizer
-    optimizer = model.configure_optimizers(weight_decay=1e-1, learning_rate=learning_rate, betas=(0.9, 0.95), device_type=device)
+    optimizer = model.configure_optimizers(weight_decay=train_config.weight_decay, learning_rate=train_config.learning_rate, betas=(0.9, 0.95), device_type=device)
 
     # Training loop
     train_iter = iter(train_loader)
@@ -115,15 +104,15 @@ def main():
     out_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "out")
     os.makedirs(out_dir, exist_ok=True)
     
-    for step in range(max_iters):
+    for step in range(train_config.max_iters):
         # Update learning rate
-        lr = get_lr(step, max_iters, learning_rate, warmup_iters, min_lr)
+        lr = get_lr(step, train_config)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
             
         # Evaluation phase
-        if step % eval_interval == 0 or step == max_iters - 1:
-            losses = estimate_loss(model, train_loader, val_loader, eval_iters, device, ctx)
+        if step % train_config.eval_interval == 0 or step == train_config.max_iters - 1:
+            losses = estimate_loss(model, train_loader, val_loader, train_config.eval_iters, device, ctx)
             print(f"Step {step}: Train loss {losses['train']:.4f}, Val loss {losses['val']:.4f}, LR: {lr:.4e}")
             
             if losses['val'] < best_val_loss:
@@ -132,7 +121,7 @@ def main():
                 checkpoint = {
                     'model': model.state_dict(),
                     'optimizer': optimizer.state_dict(),
-                    'config': config,
+                    'config': model_config,
                     'iter_num': step,
                     'best_val_loss': best_val_loss,
                 }
@@ -142,19 +131,19 @@ def main():
         # Training phase with gradient accumulation
         optimizer.zero_grad(set_to_none=True)
         
-        for micro_step in range(gradient_accumulation_steps):
+        for micro_step in range(train_config.gradient_accumulation_steps):
             x, y, train_iter = get_batch(train_iter, train_loader)
             x, y = x.to(device), y.to(device)
             
             with ctx:
                 logits, loss = model(x, targets=y)
-                loss = loss / gradient_accumulation_steps
+                loss = loss / train_config.gradient_accumulation_steps
                 
             loss.backward()
             
         # Gradient clipping
-        if grad_clip != 0.0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        if train_config.grad_clip != 0.0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), train_config.grad_clip)
             
         optimizer.step()
 

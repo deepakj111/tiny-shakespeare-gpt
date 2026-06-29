@@ -4,7 +4,7 @@ Building and training a GPT model from scratch using PyTorch on the tiny shakesp
 
 ## Setup
 
-This project uses `uv` for modern, reproducible dependency management. To sync dependencies:
+This project uses `uv` for reproducible dependency management. To sync dependencies:
 
 ```bash
 uv sync
@@ -22,7 +22,7 @@ uv run python scripts/download_dataset.py
 
 This will download `input.txt` (approximately 1.1MB of Shakespeare text) into the `data/` folder.
 
-Next, tokenize the text into integer sequences and save them as binary files (`train.bin` and `val.bin`) for highly efficient loading during training:
+Next, tokenize the text into integer sequences and save them as binary files (`train.bin` and `val.bin`) for loading during training:
 
 ```bash
 uv run python scripts/prepare_data.py
@@ -65,12 +65,12 @@ It is important to understand what this model is and what it is not:
 
 - **Rotary Position Embeddings (RoPE)**: Replaces absolute positional embeddings with relative ones for better generalization.
 - **Grouped-Query Attention (GQA)**: Reduces the number of key/value heads for faster inference and lower memory consumption.
-- **RMSNorm**: A strictly faster and more stable alternative to standard LayerNorm.
+- **RMSNorm**: An alternative to standard LayerNorm.
 - **SwiGLU FeedForward**: Replaces the standard ReLU/GELU MLPs with Swish-Gated Linear Units.
 - **Flash Attention**: Uses PyTorch's scaled dot product attention for highly optimized, memory-efficient exact attention.
 - **Weight Tying**: Shares weights between the token embedding layer and the final output layer.
 - **Residual Scaling**: Custom initialization (`1/sqrt(2 * n_layer)`) on residual projections to prevent variance explosion.
-- **Vocabulary Padding**: Pads the GPT-2 vocabulary to a multiple of 64 for optimal Tensor Core hardware utilization.
+- **Vocabulary Padding**: Pads the GPT-2 vocabulary to a multiple of 64.
 
 ### Training Optimizations
 
