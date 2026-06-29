@@ -29,3 +29,7 @@ class TrainConfig:
     wandb_project: str = 'tiny-shakespeare-gpt'
     resume: bool = False
 
+    # Evaluation generation
+    eval_generate_tokens: int = 50
+    eval_generate_prompt: str = "\n"
+

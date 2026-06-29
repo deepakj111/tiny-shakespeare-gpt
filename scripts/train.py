@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader
 from tiny_shakespeare_gpt.model import GPT, GPTConfig
 from tiny_shakespeare_gpt.dataset import MemmapTokenDataset
 from tiny_shakespeare_gpt.config import TrainConfig
+from tiny_shakespeare_gpt.tokenizer import BPETokenizer
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(name)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S", level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ def main():
 
     train_dataset = MemmapTokenDataset(train_data_path, train_config.block_size)
     val_dataset = MemmapTokenDataset(val_data_path, train_config.block_size)
+    tokenizer = BPETokenizer()
 
     train_loader = DataLoader(train_dataset, batch_size=train_config.batch_size, shuffle=True, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=train_config.batch_size, shuffle=False, pin_memory=True)
@@ -139,12 +141,24 @@ def main():
             losses = estimate_loss(model, train_loader, val_loader, train_config.eval_iters, device, ctx)
             logger.info(f"Step {step}: Train loss {losses['train']:.4f}, Val loss {losses['val']:.4f}, LR: {lr:.4e}")
             
+            # Generate sample
+            model.eval()
+            start_ids = tokenizer.encode(train_config.eval_generate_prompt)
+            x_gen = torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...]
+            with torch.no_grad():
+                with ctx:
+                    y_gen = model.generate(x_gen, train_config.eval_generate_tokens, temperature=0.8, top_k=200)
+            sample_text = tokenizer.decode(y_gen[0].tolist())
+            logger.info(f"Sample Generation:\n{sample_text}\n{'-'*30}")
+            model.train()
+            
             if train_config.wandb_log:
                 wandb.log({
                     "iter": step,
                     "train/loss": losses['train'],
                     "val/loss": losses['val'],
                     "lr": lr,
+                    "sample": wandb.Html(f"<pre>{sample_text}</pre>"),
                 })
             
             if losses['val'] < best_val_loss:
