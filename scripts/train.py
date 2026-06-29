@@ -8,6 +8,9 @@ from contextlib import nullcontext
 import torch
 import wandb
 from torch.utils.data import DataLoader
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed import init_process_group, destroy_process_group
+from torch.utils.data.distributed import DistributedSampler
 
 from tiny_shakespeare_gpt.model import GPT, GPTConfig
 from tiny_shakespeare_gpt.dataset import MemmapTokenDataset
@@ -17,23 +20,31 @@ from tiny_shakespeare_gpt.tokenizer import BPETokenizer
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(name)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def get_batch(loader_iter, loader):
+def get_batch(loader_iter, loader, ddp, sampler, epoch):
     try:
         x, y = next(loader_iter)
     except StopIteration:
+        epoch += 1
+        if ddp and sampler is not None:
+            sampler.set_epoch(epoch)
         loader_iter = iter(loader)
         x, y = next(loader_iter)
-    return x, y, loader_iter
+    return x, y, loader_iter, epoch
 
 @torch.no_grad()
-def estimate_loss(model, train_loader, val_loader, eval_iters, device, ctx):
+def estimate_loss(model, train_loader, val_loader, eval_iters, device, ctx, ddp, train_sampler, val_sampler):
     out = {}
     model.eval()
-    for split, loader in [('train', train_loader), ('val', val_loader)]:
+    
+    # Temporary epoch counters for evaluation loaders to prevent breaking training epoch
+    train_eval_epoch = 0
+    val_eval_epoch = 0
+    
+    for split, loader, sampler, epoch in [('train', train_loader, train_sampler, train_eval_epoch), ('val', val_loader, val_sampler, val_eval_epoch)]:
         loader_iter = iter(loader)
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            x, y, loader_iter = get_batch(loader_iter, loader)
+            x, y, loader_iter, epoch = get_batch(loader_iter, loader, ddp, sampler, epoch)
             x, y = x.to(device), y.to(device)
             with ctx:
                 _, loss = model(x, targets=y)
@@ -55,23 +66,41 @@ def get_lr(it, train_config):
 def main():
     train_config = TrainConfig()
     
-    if train_config.wandb_log:
+    # DDP Setup
+    ddp = int(os.environ.get('RANK', -1)) != -1
+    if ddp:
+        init_process_group(backend='nccl' if torch.cuda.is_available() else 'gloo')
+        ddp_rank = int(os.environ['RANK'])
+        ddp_local_rank = int(os.environ['LOCAL_RANK'])
+        ddp_world_size = int(os.environ['WORLD_SIZE'])
+        if torch.cuda.is_available():
+            device = f'cuda:{ddp_local_rank % torch.cuda.device_count()}'
+            torch.cuda.set_device(device)
+        else:
+            device = 'cpu'
+        master_process = ddp_rank == 0
+    else:
+        master_process = True
+        ddp_rank = 0
+        ddp_world_size = 1
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    if master_process and train_config.wandb_log:
         wandb.init(project=train_config.wandb_project, config=train_config.__dict__)
 
     # Performance settings
     torch.set_float32_matmul_precision('high')
-
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    if device == 'cuda':
+    if device.startswith('cuda'):
         dtype = 'bfloat16' if torch.cuda.is_bf16_supported() else 'float16'
     else:
         dtype = 'float32'
     
     ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
-    ctx = nullcontext() if device == 'cpu' else torch.autocast(device_type=device, dtype=ptdtype)
+    ctx = nullcontext() if device == 'cpu' else torch.autocast(device_type=device.split(':')[0], dtype=ptdtype)
     
-    logger.info(f"Using device: {device}, dtype: {dtype}")
+    if master_process:
+        logger.info(f"Using device: {device}, dtype: {dtype}, DDP: {ddp}")
 
     # Dataset
     data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
@@ -79,15 +108,25 @@ def main():
     val_data_path = os.path.join(data_dir, "val.bin")
 
     if not os.path.exists(train_data_path) or not os.path.exists(val_data_path):
-        logger.error("Data not found. Please run scripts/prepare_data.py first.")
+        if master_process:
+            logger.error("Data not found. Please run scripts/prepare_data.py first.")
+        if ddp:
+            destroy_process_group()
         return
 
     train_dataset = MemmapTokenDataset(train_data_path, train_config.block_size)
     val_dataset = MemmapTokenDataset(val_data_path, train_config.block_size)
     tokenizer = BPETokenizer()
 
-    train_loader = DataLoader(train_dataset, batch_size=train_config.batch_size, shuffle=True, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=train_config.batch_size, shuffle=False, pin_memory=True)
+    if ddp:
+        train_sampler = DistributedSampler(train_dataset, num_replicas=ddp_world_size, rank=ddp_rank, shuffle=True)
+        val_sampler = DistributedSampler(val_dataset, num_replicas=ddp_world_size, rank=ddp_rank, shuffle=False)
+    else:
+        train_sampler = None
+        val_sampler = None
+
+    train_loader = DataLoader(train_dataset, batch_size=train_config.batch_size, shuffle=(train_sampler is None), sampler=train_sampler, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=train_config.batch_size, shuffle=False, sampler=val_sampler, pin_memory=True)
 
     # Model
     model_config = GPTConfig(
@@ -101,34 +140,48 @@ def main():
     model = GPT(model_config)
     model.to(device)
     
-    if device == 'cuda':
-        logger.info("Compiling model...")
+    if device.startswith('cuda'):
+        if master_process:
+            logger.info("Compiling model...")
         model = torch.compile(model)
+        
+    if ddp:
+        if device == 'cpu':
+            model = DDP(model)
+        else:
+            model = DDP(model, device_ids=[ddp_local_rank % torch.cuda.device_count()])
+            
+    raw_model = model.module if ddp else model
 
     # Optimizer
-    optimizer = model.configure_optimizers(weight_decay=train_config.weight_decay, learning_rate=train_config.learning_rate, betas=(0.9, 0.95), device_type=device)
+    optimizer = raw_model.configure_optimizers(weight_decay=train_config.weight_decay, learning_rate=train_config.learning_rate, betas=(0.9, 0.95), device_type=device.split(':')[0])
 
     # Training loop
     train_iter = iter(train_loader)
     best_val_loss = float('inf')
     start_step = 0
+    epoch = 0
     out_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "out")
-    os.makedirs(out_dir, exist_ok=True)
+    if master_process:
+        os.makedirs(out_dir, exist_ok=True)
     
     ckpt_path = os.path.join(out_dir, "ckpt.pt")
     if train_config.resume and os.path.exists(ckpt_path):
-        logger.info(f"Resuming from checkpoint {ckpt_path}")
+        if master_process:
+            logger.info(f"Resuming from checkpoint {ckpt_path}")
         torch.serialization.add_safe_globals([GPTConfig])
+        # Need to load on mapped device to avoid memory spikes
         checkpoint = torch.load(ckpt_path, map_location=device, weights_only=True)
-        model.load_state_dict(checkpoint['model'])
+        raw_model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
         start_step = checkpoint['iter_num'] + 1
         best_val_loss = checkpoint.get('best_val_loss', best_val_loss)
         if 'rng_state' in checkpoint:
             torch.set_rng_state(checkpoint['rng_state'])
-        if 'cuda_rng_state' in checkpoint and device == 'cuda':
+        if 'cuda_rng_state' in checkpoint and device.startswith('cuda'):
             torch.cuda.set_rng_state(checkpoint['cuda_rng_state'])
-        logger.info(f"Resumed from step {start_step - 1}")
+        if master_process:
+            logger.info(f"Resumed from step {start_step - 1}")
 
     for step in range(start_step, train_config.max_iters):
         # Update learning rate
@@ -138,57 +191,61 @@ def main():
             
         # Evaluation phase
         if step % train_config.eval_interval == 0 or step == train_config.max_iters - 1:
-            losses = estimate_loss(model, train_loader, val_loader, train_config.eval_iters, device, ctx)
-            logger.info(f"Step {step}: Train loss {losses['train']:.4f}, Val loss {losses['val']:.4f}, LR: {lr:.4e}")
-            
-            # Generate sample
-            model.eval()
-            start_ids = tokenizer.encode(train_config.eval_generate_prompt)
-            x_gen = torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...]
-            with torch.no_grad():
-                with ctx:
-                    y_gen = model.generate(x_gen, train_config.eval_generate_tokens, temperature=0.8, top_k=200)
-            sample_text = tokenizer.decode(y_gen[0].tolist())
-            logger.info(f"Sample Generation:\n{sample_text}\n{'-'*30}")
-            model.train()
-            
-            if train_config.wandb_log:
-                wandb.log({
-                    "iter": step,
-                    "train/loss": losses['train'],
-                    "val/loss": losses['val'],
-                    "lr": lr,
-                    "sample": wandb.Html(f"<pre>{sample_text}</pre>"),
-                })
-            
-            if losses['val'] < best_val_loss:
-                best_val_loss = losses['val']
-                ckpt_path = os.path.join(out_dir, "ckpt.pt")
-                checkpoint = {
-                    'model': model.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'config': model_config,
-                    'iter_num': step,
-                    'best_val_loss': best_val_loss,
-                    'rng_state': torch.get_rng_state(),
-                }
-                if device == 'cuda':
-                    checkpoint['cuda_rng_state'] = torch.cuda.get_rng_state()
-                torch.save(checkpoint, ckpt_path)
-                logger.info(f"Saved new best model with val loss {best_val_loss:.4f} to {ckpt_path}")
+            losses = estimate_loss(raw_model, train_loader, val_loader, train_config.eval_iters, device, ctx, ddp, train_sampler, val_sampler)
+            if master_process:
+                logger.info(f"Step {step}: Train loss {losses['train']:.4f}, Val loss {losses['val']:.4f}, LR: {lr:.4e}")
+                
+                # Generate sample
+                raw_model.eval()
+                start_ids = tokenizer.encode(train_config.eval_generate_prompt)
+                x_gen = torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...]
+                with torch.no_grad():
+                    with ctx:
+                        y_gen = raw_model.generate(x_gen, train_config.eval_generate_tokens, temperature=0.8, top_k=200)
+                sample_text = tokenizer.decode(y_gen[0].tolist())
+                logger.info(f"Sample Generation:\n{sample_text}\n{'-'*30}")
+                raw_model.train()
+                
+                if train_config.wandb_log:
+                    wandb.log({
+                        "iter": step,
+                        "train/loss": losses['train'],
+                        "val/loss": losses['val'],
+                        "lr": lr,
+                        "sample": wandb.Html(f"<pre>{sample_text}</pre>"),
+                    })
+                
+                if losses['val'] < best_val_loss:
+                    best_val_loss = losses['val']
+                    checkpoint = {
+                        'model': raw_model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'config': model_config,
+                        'iter_num': step,
+                        'best_val_loss': best_val_loss,
+                        'rng_state': torch.get_rng_state(),
+                    }
+                    if device.startswith('cuda'):
+                        checkpoint['cuda_rng_state'] = torch.cuda.get_rng_state()
+                    torch.save(checkpoint, ckpt_path)
+                    logger.info(f"Saved new best model with val loss {best_val_loss:.4f} to {ckpt_path}")
 
         # Training phase with gradient accumulation
         optimizer.zero_grad(set_to_none=True)
         
         for micro_step in range(train_config.gradient_accumulation_steps):
-            x, y, train_iter = get_batch(train_iter, train_loader)
+            x, y, train_iter, epoch = get_batch(train_iter, train_loader, ddp, train_sampler, epoch)
             x, y = x.to(device), y.to(device)
             
-            with ctx:
-                logits, loss = model(x, targets=y)
-                loss = loss / train_config.gradient_accumulation_steps
-                
-            loss.backward()
+            # Use no_sync to avoid syncing gradients on all but the last micro_step
+            is_last_micro_step = (micro_step == train_config.gradient_accumulation_steps - 1)
+            ctx_sync = model.no_sync() if ddp and not is_last_micro_step else nullcontext()
+            
+            with ctx_sync:
+                with ctx:
+                    logits, loss = model(x, targets=y)
+                    loss = loss / train_config.gradient_accumulation_steps
+                loss.backward()
             
         # Gradient clipping
         if train_config.grad_clip != 0.0:
@@ -196,9 +253,13 @@ def main():
             
         optimizer.step()
 
-    logger.info("Training complete.")
-    if train_config.wandb_log:
-        wandb.finish()
+    if master_process:
+        logger.info("Training complete.")
+        if train_config.wandb_log:
+            wandb.finish()
+            
+    if ddp:
+        destroy_process_group()
 
 if __name__ == "__main__":
     main()
