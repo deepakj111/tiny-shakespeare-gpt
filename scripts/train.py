@@ -69,12 +69,20 @@ def main():
     # DDP Setup
     ddp = int(os.environ.get('RANK', -1)) != -1
     if ddp:
-        init_process_group(backend='nccl' if torch.cuda.is_available() else 'gloo')
+        ddp_local_world_size = int(os.environ['LOCAL_WORLD_SIZE'])
+        # Fallback to CPU/gloo if we are simulating multiple processes on fewer GPUs
+        if torch.cuda.is_available() and torch.cuda.device_count() >= ddp_local_world_size:
+            backend = 'nccl'
+        else:
+            backend = 'gloo'
+            
+        init_process_group(backend=backend)
         ddp_rank = int(os.environ['RANK'])
         ddp_local_rank = int(os.environ['LOCAL_RANK'])
         ddp_world_size = int(os.environ['WORLD_SIZE'])
-        if torch.cuda.is_available():
-            device = f'cuda:{ddp_local_rank % torch.cuda.device_count()}'
+        
+        if backend == 'nccl':
+            device = f'cuda:{ddp_local_rank}'
             torch.cuda.set_device(device)
         else:
             device = 'cpu'
