@@ -27,4 +27,5 @@ class TrainConfig:
     # Tracking configurations
     wandb_log: bool = False
     wandb_project: str = 'tiny-shakespeare-gpt'
+    resume: bool = False
 

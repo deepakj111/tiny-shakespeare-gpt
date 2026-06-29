@@ -109,10 +109,26 @@ def main():
     # Training loop
     train_iter = iter(train_loader)
     best_val_loss = float('inf')
+    start_step = 0
     out_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "out")
     os.makedirs(out_dir, exist_ok=True)
     
-    for step in range(train_config.max_iters):
+    ckpt_path = os.path.join(out_dir, "ckpt.pt")
+    if train_config.resume and os.path.exists(ckpt_path):
+        logger.info(f"Resuming from checkpoint {ckpt_path}")
+        torch.serialization.add_safe_globals([GPTConfig])
+        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=True)
+        model.load_state_dict(checkpoint['model'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        start_step = checkpoint['iter_num'] + 1
+        best_val_loss = checkpoint.get('best_val_loss', best_val_loss)
+        if 'rng_state' in checkpoint:
+            torch.set_rng_state(checkpoint['rng_state'])
+        if 'cuda_rng_state' in checkpoint and device == 'cuda':
+            torch.cuda.set_rng_state(checkpoint['cuda_rng_state'])
+        logger.info(f"Resumed from step {start_step - 1}")
+
+    for step in range(start_step, train_config.max_iters):
         # Update learning rate
         lr = get_lr(step, train_config)
         for param_group in optimizer.param_groups:
@@ -140,7 +156,10 @@ def main():
                     'config': model_config,
                     'iter_num': step,
                     'best_val_loss': best_val_loss,
+                    'rng_state': torch.get_rng_state(),
                 }
+                if device == 'cuda':
+                    checkpoint['cuda_rng_state'] = torch.cuda.get_rng_state()
                 torch.save(checkpoint, ckpt_path)
                 logger.info(f"Saved new best model with val loss {best_val_loss:.4f} to {ckpt_path}")
 
