@@ -2,12 +2,42 @@
 
 Building and training a GPT model from scratch using PyTorch on the tiny shakespeare dataset.
 
-## Setup
+## Requirements & Setup
 
-This project uses `uv` for reproducible dependency management. To sync dependencies:
+- **Python**: `>=3.11`
+- **Hardware**: A CUDA-capable GPU is strongly recommended for training, though the code supports CPU for testing.
+
+This project uses `uv` for reproducible and lightning-fast dependency management. To install dependencies:
 
 ```bash
 uv sync
+```
+
+*(Optional)* If you plan to use experiment tracking, log in to Weights & Biases:
+```bash
+uv run wandb login
+```
+
+## Project Structure
+
+A clean, modular architecture separates the core model logic from the execution scripts:
+
+```
+tiny-shakespeare-gpt/
+├── src/
+│   └── tiny_shakespeare_gpt/
+│       ├── config.py      # Dataclasses for model and training hyperparameters
+│       ├── dataset.py     # Memory-mapped PyTorch dataset
+│       ├── model.py       # Core GPT architecture (RoPE, GQA, SwiGLU, etc.)
+│       └── tokenizer.py   # BPE tokenizer wrapper
+├── scripts/
+│   ├── download_dataset.py
+│   ├── prepare_data.py
+│   ├── train.py           # Multi-GPU (DDP) enabled training loop
+│   └── generate.py        # Inference and sampling script
+├── tests/
+│   └── test_model.py      # Unit tests
+└── ARCHITECTURE.md        # Deep dive into engineering decisions
 ```
 
 ### Data Preparation
