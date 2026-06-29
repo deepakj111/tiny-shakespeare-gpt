@@ -47,5 +47,20 @@ A **Cosine Annealing** learning rate scheduler is implemented, complete with a l
 ### Gradient Accumulation & Clipping
 To allow for training with large effective batch sizes on limited VRAM hardware, **Gradient Accumulation** is used. Instead of updating weights every micro-batch, gradients are accumulated and stepped after several micro-batches. Additionally, **Gradient Clipping** (`clip_grad_norm_`) is applied just before the optimizer step to maintain stability and prevent exploding gradients.
 
+### Distributed Data Parallel (DDP)
+The training architecture seamlessly scales across multiple GPUs using PyTorch's `DistributedDataParallel`.
+- **Dataset Sharding**: `DistributedSampler` is used to split the dataset, ensuring each GPU processes a unique shard of data without overlap.
+- **Gradient Synchronization**: The model utilizes the `no_sync()` context manager during gradient accumulation to disable gradient broadcasting until the final micro-step, significantly improving multi-GPU throughput.
+- **Local Simulation**: If launched via `torchrun` with more processes than available GPUs, it intelligently falls back to the CPU `gloo` backend to allow local testing and debugging of the distributed logic.
+
+### Checkpoint Resumability
+To guard against crashes or preemptions, the model saves a complete snapshot of its state at each validation improvement.
+- **State Preservation**: Saves `model.state_dict()`, `optimizer.state_dict()`, and the training iteration.
+- **RNG Synchronization**: Explicitly saves and restores the random number generator states (`torch.get_rng_state()` and `cuda.get_rng_state()`) to guarantee that resuming a run is mathematically identical to an uninterrupted run.
+
+### Logging & Experiment Tracking
+- **Weights & Biases (wandb)**: Integrated for real-time tracking of training and validation loss curves, learning rates, and metrics.
+- **Qualitative Evaluation**: During evaluation phases, the model runs a live inference pass to generate a small block of text. This is logged to the console and `wandb`, providing a visual indicator of the model's grasp of syntax and vocabulary over time.
+
 ### Dataset Loading
 To avoid loading the entire dataset into RAM, the project uses NumPy's `memmap` to read the tokenized integer data directly from the binary files (`train.bin`, `val.bin`). This results in instantaneous startup times and zero memory overhead.

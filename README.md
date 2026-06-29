@@ -38,7 +38,31 @@ Run the following command:
 uv run python scripts/train.py
 ```
 
-The script will periodically evaluate the model on the training and validation sets and print the losses. By default, it runs for a quick 500 steps, but you can adjust `max_iters`, `block_size`, and `batch_size` in the script for longer training. During training, the model tracks validation loss and saves the best checkpoint in the `out/` directory.
+The script will periodically evaluate the model on the training and validation sets, print the losses, and generate a sample text to qualitatively track the model's progress. 
+
+### Configuration & Resumability
+
+All hyperparameters and settings are managed in `src/tiny_shakespeare_gpt/config.py` via the `TrainConfig` dataclass. You can adjust `max_iters`, `block_size`, `batch_size`, and other training parameters there.
+
+- **Experiment Tracking**: Set `wandb_log = True` in `config.py` to automatically stream your metrics and generated text samples to your [Weights & Biases](https://wandb.ai/) dashboard.
+- **Resuming Training**: If your training run crashes or is preempted, simply set `resume = True` in `config.py`. The script will automatically load `out/ckpt.pt`, restore the optimizer state, and precisely re-seed the RNG state so it picks up exactly where it left off.
+
+## Multi-GPU Distributed Training (DDP)
+
+The training script natively supports PyTorch Distributed Data Parallel (DDP) for scaling across multiple GPUs and compute nodes. 
+
+To launch a distributed training run across all available GPUs on a single node, use `torchrun`:
+
+```bash
+uv run torchrun --standalone --nproc_per_node=gpu scripts/train.py
+```
+
+**Testing DDP Locally:**
+If you want to test the multi-process logic on a machine with a single GPU (or no GPU), you can simulate it by forcing the number of processes. The code is smart enough to detect if you are requesting more processes than available GPUs and will automatically fall back to the CPU (`gloo` backend) to prevent crashes:
+
+```bash
+uv run torchrun --standalone --nproc_per_node=2 scripts/train.py
+```
 
 ## Generation
 
@@ -78,6 +102,9 @@ It is important to understand what this model is and what it is not:
 - **Cosine Learning Rate Scheduler**: Implements a cosine annealing schedule with a linear warmup phase for stable and effective convergence.
 - **Gradient Accumulation**: Decouples effective batch size from VRAM limits.
 - **Gradient Clipping**: Prevents exploding gradients during training.
-- **Checkpoint Tracking**: Automatically tracks and saves only the model checkpoint with the best validation loss.
+- **Checkpoint Tracking & Resumability**: Automatically tracks and saves the model, optimizer, and RNG states. You can perfectly resume training from the exact step it crashed.
+- **Distributed Data Parallel (DDP)**: Scales seamlessly across multi-GPU clusters using `torchrun`, with intelligent fallbacks for local CPU testing.
+- **Qualitative Evaluation**: Intermittently generates sample text during training evaluation loops to visually confirm grammar and learning progress.
+- **Experiment Tracking**: Integrated with Weights & Biases (`wandb`) for real-time visualization of loss curves and text samples.
 
 For more details on the design, see [ARCHITECTURE.md](ARCHITECTURE.md).
