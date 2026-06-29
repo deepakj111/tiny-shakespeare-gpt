@@ -12,6 +12,7 @@ dependencies = [
     "tiktoken>=0.13.0",
     "torch>=2.12.1",
     "tqdm>=4.68.3",
+    "wandb>=0.16.0",
 ]
 
 [tool.pytest.ini_options]

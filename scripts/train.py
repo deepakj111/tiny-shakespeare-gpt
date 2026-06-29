@@ -3,13 +3,18 @@ Training script for the GPT model.
 """
 import os
 import math
+import logging
 from contextlib import nullcontext
 import torch
+import wandb
 from torch.utils.data import DataLoader
 
 from tiny_shakespeare_gpt.model import GPT, GPTConfig
 from tiny_shakespeare_gpt.dataset import MemmapTokenDataset
 from tiny_shakespeare_gpt.config import TrainConfig
+
+logging.basicConfig(format="%(asctime)s - %(levelname)s - %(name)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S", level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def get_batch(loader_iter, loader):
     try:
@@ -48,6 +53,9 @@ def get_lr(it, train_config):
 
 def main():
     train_config = TrainConfig()
+    
+    if train_config.wandb_log:
+        wandb.init(project=train_config.wandb_project, config=train_config.__dict__)
 
     # Performance settings
     torch.set_float32_matmul_precision('high')
@@ -62,7 +70,7 @@ def main():
     ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
     ctx = nullcontext() if device == 'cpu' else torch.autocast(device_type=device, dtype=ptdtype)
     
-    print(f"Using device: {device}, dtype: {dtype}")
+    logger.info(f"Using device: {device}, dtype: {dtype}")
 
     # Dataset
     data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
@@ -70,7 +78,7 @@ def main():
     val_data_path = os.path.join(data_dir, "val.bin")
 
     if not os.path.exists(train_data_path) or not os.path.exists(val_data_path):
-        print("Data not found. Please run scripts/prepare_data.py first.")
+        logger.error("Data not found. Please run scripts/prepare_data.py first.")
         return
 
     train_dataset = MemmapTokenDataset(train_data_path, train_config.block_size)
@@ -92,7 +100,7 @@ def main():
     model.to(device)
     
     if device == 'cuda':
-        print("Compiling model...")
+        logger.info("Compiling model...")
         model = torch.compile(model)
 
     # Optimizer
@@ -113,7 +121,15 @@ def main():
         # Evaluation phase
         if step % train_config.eval_interval == 0 or step == train_config.max_iters - 1:
             losses = estimate_loss(model, train_loader, val_loader, train_config.eval_iters, device, ctx)
-            print(f"Step {step}: Train loss {losses['train']:.4f}, Val loss {losses['val']:.4f}, LR: {lr:.4e}")
+            logger.info(f"Step {step}: Train loss {losses['train']:.4f}, Val loss {losses['val']:.4f}, LR: {lr:.4e}")
+            
+            if train_config.wandb_log:
+                wandb.log({
+                    "iter": step,
+                    "train/loss": losses['train'],
+                    "val/loss": losses['val'],
+                    "lr": lr,
+                })
             
             if losses['val'] < best_val_loss:
                 best_val_loss = losses['val']
@@ -126,7 +142,7 @@ def main():
                     'best_val_loss': best_val_loss,
                 }
                 torch.save(checkpoint, ckpt_path)
-                print(f"Saved new best model with val loss {best_val_loss:.4f} to {ckpt_path}")
+                logger.info(f"Saved new best model with val loss {best_val_loss:.4f} to {ckpt_path}")
 
         # Training phase with gradient accumulation
         optimizer.zero_grad(set_to_none=True)
@@ -147,7 +163,9 @@ def main():
             
         optimizer.step()
 
-    print("Training complete.")
+    logger.info("Training complete.")
+    if train_config.wandb_log:
+        wandb.finish()
 
 if __name__ == "__main__":
     main()

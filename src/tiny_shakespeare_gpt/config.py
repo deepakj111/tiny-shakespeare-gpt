@@ -23,3 +23,8 @@ class TrainConfig:
     n_kv_head: int = 2
     n_embd: int = 128
     dropout: float = 0.0
+
+    # Tracking configurations
+    wandb_log: bool = False
+    wandb_project: str = 'tiny-shakespeare-gpt'
+
