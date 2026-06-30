@@ -6,10 +6,10 @@ import tiktoken
 class BPETokenizer:
     """
     A Byte-Pair Encoding (BPE) tokenizer wrapping OpenAI's tiktoken.
-    Defaults to 'gpt2' encoding which is standard for from-scratch implementations,
-    but can use 'cl100k_base' (GPT-4) as well.
+    Defaults to 'o200k_base' encoding which is standard for modern GPT-4o models,
+    reflecting state-of-the-art vocabulary choices.
     """
-    def __init__(self, encoding_name: str = "gpt2"):
+    def __init__(self, encoding_name: str = "o200k_base"):
         self.encoding = tiktoken.get_encoding(encoding_name)
         self.vocab_size = self.encoding.n_vocab
 
