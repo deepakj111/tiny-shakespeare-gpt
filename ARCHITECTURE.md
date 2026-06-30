@@ -5,7 +5,7 @@ This document outlines the design decisions and architectural components used in
 ## Core Components
 
 ### 1. Tokenization and Vocabulary
-The project uses Byte-Pair Encoding (BPE) provided by OpenAI's `tiktoken` library. By default, it employs the `gpt2` vocabulary. However, the vocabulary size is padded from 50257 to 50304 (a multiple of 64). 
+The project uses Byte-Pair Encoding (BPE) provided by OpenAI's `tiktoken` library. By default, it employs the state-of-the-art `o200k_base` vocabulary (introduced with GPT-4o). The vocabulary size is padded to a multiple of 64. 
 - **Why**: Padding the vocabulary to a multiple of 64 ensures hardware utilization on NVIDIA GPUs (Tensor Cores), leading to faster training times without impacting model quality.
 
 ### 2. Normalization (RMSNorm)
@@ -23,10 +23,11 @@ The attention block incorporates two major optimizations:
 - **Grouped-Query Attention (GQA)**: Instead of Multi-Head Attention (where every query head has a dedicated key/value head), GQA groups multiple query heads to share a single key/value head. This drastically reduces the memory bandwidth required for the KV cache during inference, allowing for faster decoding.
 - **Flash Attention**: The scaled dot-product attention is computed using PyTorch's `F.scaled_dot_product_attention`, which dispatches to memory-efficient CUDA kernels (like FlashAttention) under the hood. This eliminates the need to materialize the huge `(T, T)` attention matrix in VRAM.
 
-### 5. FeedForward Network (SwiGLU)
-The standard MLP block is replaced with a **SwiGLU** (Swish-Gated Linear Unit) network.
-- **Why**: Instead of `ReLU(x * W1) * W2`, SwiGLU uses a gating mechanism: `(x * W1 * Swish(x * W1)) * W3`. This has been shown to yield better performance per parameter.
-- **Sizing**: We use a hidden dimension expansion factor of `8/3` (rounded to a multiple of 256), rather than the traditional factor of `4`.
+### 5. Sparse Mixture of Experts (MoE) & SwiGLU
+The standard dense MLP block is replaced with a **Sparse Mixture of Experts (MoE)** architecture using **SwiGLU** (Swish-Gated Linear Unit) networks for the individual experts.
+- **Router**: A gating network dynamically routes each token to the top-K (typically 2) experts out of N available experts.
+- **Why MoE**: This allows the model to scale its parameter count massively while keeping the active parameter count (and computational cost) per token low, a paradigm heavily utilized by GPT-4 and modern state-of-the-art models.
+- **SwiGLU Experts**: Instead of `ReLU(x * W1) * W2`, each expert uses a gating mechanism: `(x * W1 * Swish(x * W1)) * W3`. We use a hidden dimension expansion factor of `8/3` (rounded to a multiple of 256), rather than the traditional factor of `4`.
 
 ### 6. Weight Initialization and Tying
 The model employs a custom scaled initialization strategy to maintain stability.
@@ -53,9 +54,9 @@ The training architecture seamlessly scales across multiple GPUs using PyTorch's
 - **Gradient Synchronization**: The model utilizes the `no_sync()` context manager during gradient accumulation to disable gradient broadcasting until the final micro-step, significantly improving multi-GPU throughput.
 - **Local Simulation**: If launched via `torchrun` with more processes than available GPUs, it intelligently falls back to the CPU `gloo` backend to allow local testing and debugging of the distributed logic.
 
-### Checkpoint Resumability
-To guard against crashes or preemptions, the model saves a complete snapshot of its state at each validation improvement.
-- **State Preservation**: Saves `model.state_dict()`, `optimizer.state_dict()`, and the training iteration.
+### Checkpoint Resumability & Safetensors
+To guard against crashes or preemptions, the model saves a complete snapshot of its state at each validation improvement. The project utilizes the **Safetensors** format for secure and zero-copy loading of model weights.
+- **State Preservation**: The model weights are serialized to `model.safetensors`, avoiding the inherent security and performance issues of Python's `pickle`. The `optimizer.state_dict()`, metadata, and the training iteration are saved alongside it in a separate PyTorch metadata file.
 - **RNG Synchronization**: Explicitly saves and restores the random number generator states (`torch.get_rng_state()` and `cuda.get_rng_state()`) to guarantee that resuming a run is mathematically identical to an uninterrupted run.
 
 ### Logging & Experiment Tracking
