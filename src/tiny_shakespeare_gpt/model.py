@@ -17,6 +17,8 @@ class GPTConfig:
     n_embd: int = 384
     dropout: float = 0.0
     bias: bool = False      # No biases in linear layers/norms for speed/stability
+    n_experts: int = 8      # MoE parameter: total experts
+    num_experts_per_tok: int = 2 # MoE parameter: experts chosen per token
 
 class RMSNorm(nn.Module):
     """
@@ -56,6 +58,66 @@ class FeedForward(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # SwiGLU activation: (xW1 * sigmoid(xW1)) * xW3
         return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))
+
+class Router(nn.Module):
+    """
+    Router for Sparse Mixture of Experts.
+    """
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        self.n_experts = config.n_experts
+        self.num_experts_per_tok = config.num_experts_per_tok
+        self.gate = nn.Linear(config.n_embd, config.n_experts, bias=False)
+        
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        # x: (B, T, C)
+        logits = self.gate(x) # (B, T, n_experts)
+        scores = F.softmax(logits, dim=-1, dtype=torch.float32).type_as(x)
+        weights, selected_experts = torch.topk(scores, self.num_experts_per_tok, dim=-1)
+        # Normalize weights
+        weights = weights / weights.sum(dim=-1, keepdim=True)
+        return weights, selected_experts
+
+class SparseMoE(nn.Module):
+    """
+    Sparse Mixture of Experts layer containing a router and multiple FeedForward experts.
+    """
+    def __init__(self, config: GPTConfig):
+        super().__init__()
+        self.router = Router(config)
+        self.experts = nn.ModuleList([FeedForward(config) for _ in range(config.n_experts)])
+        
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, T, C = x.shape
+        x_flat = x.view(-1, C)
+        
+        weights, selected_experts = self.router(x)
+        weights_flat = weights.view(-1, weights.shape[-1])
+        selected_experts_flat = selected_experts.view(-1, selected_experts.shape[-1])
+        
+        out = torch.zeros_like(x_flat)
+        
+        # Iterate over each expert
+        for i, expert in enumerate(self.experts):
+            # Find tokens assigned to expert i
+            expert_mask, top_k_idx = torch.where(selected_experts_flat == i)
+            if expert_mask.numel() == 0:
+                continue
+                
+            # Extract tokens
+            expert_tokens = x_flat[expert_mask]
+            
+            # Process through the expert
+            expert_out = expert(expert_tokens)
+            
+            # Apply routing weight
+            expert_weight = weights_flat[expert_mask, top_k_idx].unsqueeze(-1)
+            expert_out = expert_out * expert_weight
+            
+            # Accumulate to output
+            out.index_add_(0, expert_mask, expert_out)
+            
+        return out.view(B, T, C)
 
 def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0) -> torch.Tensor:
     """Precompute the frequency tensor for complex exponentials (RoPE)."""
@@ -147,13 +209,13 @@ class CausalSelfAttention(nn.Module):
         return self.resid_dropout(self.wo(y))
 
 class Block(nn.Module):
-    """Transformer Block containing Self-Attention and FeedForward networks."""
+    """Transformer Block containing Self-Attention and MoE FeedForward networks."""
     def __init__(self, config: GPTConfig):
         super().__init__()
         self.norm1 = RMSNorm(config.n_embd)
         self.attn = CausalSelfAttention(config)
         self.norm2 = RMSNorm(config.n_embd)
-        self.mlp = FeedForward(config)
+        self.mlp = SparseMoE(config)
 
     def forward(self, x: torch.Tensor, freqs_cis: torch.Tensor, start_pos: int = 0, use_cache: bool = False) -> torch.Tensor:
         x = x + self.attn(self.norm1(x), freqs_cis, start_pos, use_cache)
