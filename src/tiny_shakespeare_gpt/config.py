@@ -23,6 +23,8 @@ class TrainConfig:
     n_kv_head: int = 2
     n_embd: int = 128
     dropout: float = 0.0
+    n_experts: int = 8
+    num_experts_per_tok: int = 2
 
     # Tracking configurations
     wandb_log: bool = False
