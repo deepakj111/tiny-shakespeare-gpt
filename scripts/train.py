@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 from torch.utils.data.distributed import DistributedSampler
+import safetensors.torch
 
 from tiny_shakespeare_gpt.model import GPT, GPTConfig
 from tiny_shakespeare_gpt.dataset import MemmapTokenDataset
@@ -173,21 +174,27 @@ def main():
     if master_process:
         os.makedirs(out_dir, exist_ok=True)
     
-    ckpt_path = os.path.join(out_dir, "ckpt.pt")
-    if train_config.resume and os.path.exists(ckpt_path):
+    model_ckpt_path = os.path.join(out_dir, "model.safetensors")
+    meta_ckpt_path = os.path.join(out_dir, "ckpt_meta.pt")
+    
+    if train_config.resume and os.path.exists(model_ckpt_path) and os.path.exists(meta_ckpt_path):
         if master_process:
-            logger.info(f"Resuming from checkpoint {ckpt_path}")
+            logger.info(f"Resuming from checkpoint {model_ckpt_path} and {meta_ckpt_path}")
+            
+        # Load model weights via safetensors
+        safetensors.torch.load_model(raw_model, model_ckpt_path)
+        
+        # Load metadata and optimizer state via standard PyTorch
         torch.serialization.add_safe_globals([GPTConfig])
-        # Need to load on mapped device to avoid memory spikes
-        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=True)
-        raw_model.load_state_dict(checkpoint['model'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        start_step = checkpoint['iter_num'] + 1
-        best_val_loss = checkpoint.get('best_val_loss', best_val_loss)
-        if 'rng_state' in checkpoint:
-            torch.set_rng_state(checkpoint['rng_state'])
-        if 'cuda_rng_state' in checkpoint and device.startswith('cuda'):
-            torch.cuda.set_rng_state(checkpoint['cuda_rng_state'])
+        meta = torch.load(meta_ckpt_path, map_location=device, weights_only=True)
+        
+        optimizer.load_state_dict(meta['optimizer'])
+        start_step = meta['iter_num'] + 1
+        best_val_loss = meta.get('best_val_loss', best_val_loss)
+        if 'rng_state' in meta:
+            torch.set_rng_state(meta['rng_state'])
+        if 'cuda_rng_state' in meta and device.startswith('cuda'):
+            torch.cuda.set_rng_state(meta['cuda_rng_state'])
         if master_process:
             logger.info(f"Resumed from step {start_step - 1}")
 
@@ -225,8 +232,14 @@ def main():
                 
                 if losses['val'] < best_val_loss:
                     best_val_loss = losses['val']
-                    checkpoint = {
-                        'model': raw_model.state_dict(),
+                    model_ckpt_path = os.path.join(out_dir, "model.safetensors")
+                    meta_ckpt_path = os.path.join(out_dir, "ckpt_meta.pt")
+                    
+                    # Save model weights via safetensors
+                    safetensors.torch.save_model(raw_model, model_ckpt_path)
+                    
+                    # Save training state via torch.save
+                    meta = {
                         'optimizer': optimizer.state_dict(),
                         'config': model_config,
                         'iter_num': step,
@@ -234,9 +247,9 @@ def main():
                         'rng_state': torch.get_rng_state(),
                     }
                     if device.startswith('cuda'):
-                        checkpoint['cuda_rng_state'] = torch.cuda.get_rng_state()
-                    torch.save(checkpoint, ckpt_path)
-                    logger.info(f"Saved new best model with val loss {best_val_loss:.4f} to {ckpt_path}")
+                        meta['cuda_rng_state'] = torch.cuda.get_rng_state()
+                    torch.save(meta, meta_ckpt_path)
+                    logger.info(f"Saved new best model with val loss {best_val_loss:.4f} to {model_ckpt_path}")
 
         # Training phase with gradient accumulation
         optimizer.zero_grad(set_to_none=True)
