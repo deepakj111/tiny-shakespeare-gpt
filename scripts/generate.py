@@ -30,29 +30,25 @@ def main():
 
     # Load checkpoint
     out_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "out")
-    ckpt_path = os.path.join(out_dir, "ckpt.pt")
+    model_ckpt_path = os.path.join(out_dir, "model.safetensors")
+    meta_ckpt_path = os.path.join(out_dir, "ckpt_meta.pt")
     
-    if not os.path.exists(ckpt_path):
-        print(f"Error: Checkpoint not found at {ckpt_path}")
+    if not os.path.exists(model_ckpt_path) or not os.path.exists(meta_ckpt_path):
+        print(f"Error: Checkpoint not found at {model_ckpt_path} or {meta_ckpt_path}")
         print("Please run scripts/train.py first.")
         return
 
-    print(f"Loading checkpoint from {ckpt_path}")
+    print(f"Loading checkpoint from {model_ckpt_path} and {meta_ckpt_path}")
     torch.serialization.add_safe_globals([GPTConfig])
-    checkpoint = torch.load(ckpt_path, map_location=device, weights_only=True)
+    meta = torch.load(meta_ckpt_path, map_location=device, weights_only=True)
     
     # Initialize model from checkpoint config
-    config = checkpoint['config']
+    config = meta['config']
     model = GPT(config)
     
-    # Remove any unwanted prefix if model was trained with DDP or similar (though not used currently, good practice)
-    state_dict = checkpoint['model']
-    unwanted_prefix = '_orig_mod.'
-    for k, v in list(state_dict.items()):
-        if k.startswith(unwanted_prefix):
-            state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
-            
-    model.load_state_dict(state_dict)
+    # Load weights
+    import safetensors.torch
+    safetensors.torch.load_model(model, model_ckpt_path)
     model.eval()
     model.to(device)
 
