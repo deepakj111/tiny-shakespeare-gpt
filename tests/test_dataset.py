@@ -5,7 +5,7 @@ from tiny_shakespeare_gpt.dataset import MemmapTokenDataset
 def test_memmap_token_dataset(tmp_path):
     # Create a dummy binary file with tokens 0..99
     dummy_file = tmp_path / "dummy.bin"
-    tokens = np.arange(100, dtype=np.uint16)
+    tokens = np.arange(100, dtype=np.uint32)
     tokens.tofile(dummy_file)
     
     block_size = 8

@@ -134,8 +134,8 @@ def main():
         train_sampler = None
         val_sampler = None
 
-    train_loader = DataLoader(train_dataset, batch_size=train_config.batch_size, shuffle=(train_sampler is None), sampler=train_sampler, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=train_config.batch_size, shuffle=False, sampler=val_sampler, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=train_config.batch_size, shuffle=(train_sampler is None), sampler=train_sampler, pin_memory=False)
+    val_loader = DataLoader(val_dataset, batch_size=train_config.batch_size, shuffle=False, sampler=val_sampler, pin_memory=False)
 
     # Model
     model_config = GPTConfig(
@@ -151,8 +151,8 @@ def main():
     
     if device.startswith('cuda'):
         if master_process:
-            logger.info("Compiling model...")
-        model = torch.compile(model)
+            logger.info("Compiling model... (Skipped for stability)")
+        # model = torch.compile(model)
         
     if ddp:
         if device == 'cpu':
@@ -210,16 +210,17 @@ def main():
             if master_process:
                 logger.info(f"Step {step}: Train loss {losses['train']:.4f}, Val loss {losses['val']:.4f}, LR: {lr:.4e}")
                 
-                # Generate sample
-                raw_model.eval()
+                # Generate sample (use uncompiled model to avoid recompilation OOMs on every token)
+                model_for_eval = raw_model._orig_mod if hasattr(raw_model, '_orig_mod') else raw_model
+                model_for_eval.eval()
                 start_ids = tokenizer.encode(train_config.eval_generate_prompt)
                 x_gen = torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...]
                 with torch.no_grad():
                     with ctx:
-                        y_gen = raw_model.generate(x_gen, train_config.eval_generate_tokens, temperature=0.8, top_k=200)
+                        y_gen = model_for_eval.generate(x_gen, train_config.eval_generate_tokens, temperature=0.8, top_k=200)
                 sample_text = tokenizer.decode(y_gen[0].tolist())
                 logger.info(f"Sample Generation:\n{sample_text}\n{'-'*30}")
-                raw_model.train()
+                model_for_eval.train()
                 
                 if train_config.wandb_log:
                     wandb.log({
@@ -236,7 +237,8 @@ def main():
                     meta_ckpt_path = os.path.join(out_dir, "ckpt_meta.pt")
                     
                     # Save model weights via safetensors
-                    safetensors.torch.save_model(raw_model, model_ckpt_path)
+                    model_to_save = raw_model._orig_mod if hasattr(raw_model, '_orig_mod') else raw_model
+                    safetensors.torch.save_model(model_to_save, model_ckpt_path)
                     
                     # Save training state via torch.save
                     meta = {

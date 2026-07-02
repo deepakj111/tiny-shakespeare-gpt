@@ -24,7 +24,7 @@ def main():
     train_text = text[:int(n * 0.9)]
     val_text = text[int(n * 0.9):]
 
-    tokenizer = BPETokenizer("gpt2")
+    tokenizer = BPETokenizer()
     
     print("Encoding training data...")
     train_ids = tokenizer.encode(train_text)
@@ -35,9 +35,9 @@ def main():
     print(f"Validation tokens: {len(val_ids):,}")
 
     # Export to binary files
-    # GPT-2 vocab size is 50257, so uint16 (max 65535) is sufficient and saves memory
-    train_arr = np.array(train_ids, dtype=np.uint16)
-    val_arr = np.array(val_ids, dtype=np.uint16)
+    # o200k_base vocab size is ~200k, so uint32 is required
+    train_arr = np.array(train_ids, dtype=np.uint32)
+    val_arr = np.array(val_ids, dtype=np.uint32)
     
     train_arr.tofile(TRAIN_FILE)
     val_arr.tofile(VAL_FILE)

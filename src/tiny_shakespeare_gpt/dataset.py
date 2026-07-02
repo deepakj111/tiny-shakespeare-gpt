@@ -11,7 +11,7 @@ class MemmapTokenDataset(Dataset):
     Using memory-mapping ensures that huge datasets load instantly and consume 
     almost zero RAM.
     """
-    def __init__(self, file_path: str, block_size: int, dtype: np.dtype = np.uint16):
+    def __init__(self, file_path: str, block_size: int, dtype: np.dtype = np.uint32):
         self.data = np.memmap(file_path, dtype=dtype, mode='r')
         self.block_size = block_size
 

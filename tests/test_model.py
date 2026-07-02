@@ -5,7 +5,7 @@ def test_gpt_config():
     config = GPTConfig()
     
     # Check default attributes exist
-    assert config.vocab_size == 50304
+    assert config.vocab_size == 200064
     assert config.n_layer == 6
     assert config.bias is False
 

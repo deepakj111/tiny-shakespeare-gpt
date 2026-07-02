@@ -10,7 +10,7 @@ import torch.nn as nn
 @dataclass
 class GPTConfig:
     block_size: int = 1024
-    vocab_size: int = 50304 # GPT-2 vocab size padded to a multiple of 64 for efficiency
+    vocab_size: int = 200064 # o200k_base vocab size (200019) padded to a multiple of 64
     n_layer: int = 6
     n_head: int = 6
     n_kv_head: int = 2      # Grouped-Query Attention (fewer KV heads than query heads)
