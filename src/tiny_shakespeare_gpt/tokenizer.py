@@ -1,7 +1,9 @@
 """
 Byte-Pair Encoding (BPE) tokenizer for the GPT model.
 """
+
 import tiktoken
+
 
 class BPETokenizer:
     """
@@ -9,6 +11,7 @@ class BPETokenizer:
     Defaults to 'o200k_base' encoding which is standard for modern GPT-4o models,
     reflecting state-of-the-art vocabulary choices.
     """
+
     def __init__(self, encoding_name: str = "o200k_base"):
         self.encoding = tiktoken.get_encoding(encoding_name)
         self.vocab_size = self.encoding.n_vocab

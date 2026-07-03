@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+
 @dataclass
 class TrainConfig:
     # Basic configuration
@@ -8,7 +9,7 @@ class TrainConfig:
     max_iters: int = 500
     eval_interval: int = 100
     eval_iters: int = 20
-    
+
     # Optimization configurations
     learning_rate: float = 1e-3
     min_lr: float = 1e-4
@@ -16,7 +17,7 @@ class TrainConfig:
     grad_clip: float = 1.0
     weight_decay: float = 1e-1
     gradient_accumulation_steps: int = 16
-    
+
     # Model configuration
     n_layer: int = 4
     n_head: int = 4
@@ -28,10 +29,9 @@ class TrainConfig:
 
     # Tracking configurations
     wandb_log: bool = False
-    wandb_project: str = 'tiny-shakespeare-gpt'
+    wandb_project: str = "tiny-shakespeare-gpt"
     resume: bool = False
 
     # Evaluation generation
     eval_generate_tokens: int = 50
     eval_generate_prompt: str = "\n"
-

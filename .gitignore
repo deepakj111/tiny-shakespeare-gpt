@@ -6,7 +6,7 @@ __pycache__/
 # PyTorch
 *.pth
 *.pt
-*.out
+out/
 
 # Environments
 .env
