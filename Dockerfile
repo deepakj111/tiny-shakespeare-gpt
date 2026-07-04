@@ -11,12 +11,14 @@ WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1
 ENV UV_LINK_MODE=copy
 
-# Install dependencies first for better caching
+# Install dependencies first for better caching (without installing the project itself yet)
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy the application code
 COPY . .
+# Now install the project
+RUN uv sync --frozen --no-dev
 
 # Ensure entrypoint is executable
 RUN chmod +x scripts/docker-entrypoint.sh
