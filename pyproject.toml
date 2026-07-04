@@ -22,6 +22,14 @@ dependencies = [
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/tiny_shakespeare_gpt", "scripts"]
+
+[project.scripts]
+train = "scripts.train:main"
+generate = "scripts.generate:main"
+serve = "scripts.serve:main"
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",

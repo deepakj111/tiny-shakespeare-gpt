@@ -200,7 +200,11 @@ async def generate_text(request: GenerateRequest):
         return GenerateResponse(text=output_text[len(start_prompt) :])
 
 
-if __name__ == "__main__":
+def main():
     import uvicorn
 
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+if __name__ == "__main__":
+    main()
