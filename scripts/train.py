@@ -298,8 +298,8 @@ def main():
                     f"Step {step}: Train loss {losses['train']:.4f}, Val loss {losses['val']:.4f}, LR: {lr:.4e}"
                 )
                 history_iters.append(step)
-                history_train_loss.append(losses['train'])
-                history_val_loss.append(losses['val'])
+                history_train_loss.append(losses["train"])
+                history_val_loss.append(losses["val"])
                 history_lr.append(lr)
 
                 # Generate sample (use uncompiled model to avoid recompilation OOMs on every token)
@@ -396,28 +396,32 @@ def main():
 
     if master_process:
         logger.info("Training complete.")
-        
+
         end_time = time.time()
         training_time_seconds = end_time - start_time
-        
+
         plt.figure(figsize=(10, 6))
-        plt.plot(history_iters, history_train_loss, label='Train Loss')
-        plt.plot(history_iters, history_val_loss, label='Val Loss')
-        plt.xlabel('Iterations')
-        plt.ylabel('Loss')
-        plt.title('Training and Validation Loss Curve')
+        plt.plot(history_iters, history_train_loss, label="Train Loss")
+        plt.plot(history_iters, history_val_loss, label="Val Loss")
+        plt.xlabel("Iterations")
+        plt.ylabel("Loss")
+        plt.title("Training and Validation Loss Curve")
         plt.legend()
         plt.grid(True)
         loss_curve_path = os.path.join(out_dir, "loss_curve.png")
         plt.savefig(loss_curve_path)
         plt.close()
-        
+
         total_params = sum(p.numel() for p in raw_model.parameters())
-        trainable_params = sum(p.numel() for p in raw_model.parameters() if p.requires_grad)
-        
-        final_train_loss = f"{history_train_loss[-1]:.4f}" if history_train_loss else "N/A"
+        trainable_params = sum(
+            p.numel() for p in raw_model.parameters() if p.requires_grad
+        )
+
+        final_train_loss = (
+            f"{history_train_loss[-1]:.4f}" if history_train_loss else "N/A"
+        )
         final_val_loss = f"{history_val_loss[-1]:.4f}" if history_val_loss else "N/A"
-        
+
         report_md = f"""# Training Report
 
 ## Architecture
