@@ -143,7 +143,7 @@ docker run -p 8000:8000 tiny-shakespeare-gpt
 
 ## Code Quality Enforcement
 
-To ensure production-grade quality, the codebase enforces strict linting, formatting, and static type-checking using `ruff` and `mypy`. 
+The codebase enforces strict linting, formatting, and static type-checking using `ruff` and `mypy`. 
 
 Run the automated checks:
 ```bash

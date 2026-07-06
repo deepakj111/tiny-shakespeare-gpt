@@ -3,11 +3,13 @@ Training script for the GPT model.
 """
 
 import os
+import time
 import math
 import logging
 from contextlib import nullcontext
 import torch
 import wandb
+import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
@@ -225,6 +227,14 @@ def main():
         device_type=device.split(":")[0],
     )
 
+    if master_process:
+        start_time = time.time()
+        history_iters = []
+        history_train_loss = []
+        history_val_loss = []
+        history_lr = []
+        sample_outputs = []
+
     # Training loop
     train_iter = iter(train_loader)
     best_val_loss = float("inf")
@@ -287,6 +297,10 @@ def main():
                 logger.info(
                     f"Step {step}: Train loss {losses['train']:.4f}, Val loss {losses['val']:.4f}, LR: {lr:.4e}"
                 )
+                history_iters.append(step)
+                history_train_loss.append(losses['train'])
+                history_val_loss.append(losses['val'])
+                history_lr.append(lr)
 
                 # Generate sample (use uncompiled model to avoid recompilation OOMs on every token)
                 model_for_eval = (
@@ -309,6 +323,7 @@ def main():
                         )
                 sample_text = tokenizer.decode(y_gen[0].tolist())
                 logger.info(f"Sample Generation:\n{sample_text}\n{'-' * 30}")
+                sample_outputs.append((step, sample_text))
                 model_for_eval.train()
 
                 if train_config.wandb_log:
@@ -381,6 +396,67 @@ def main():
 
     if master_process:
         logger.info("Training complete.")
+        
+        end_time = time.time()
+        training_time_seconds = end_time - start_time
+        
+        plt.figure(figsize=(10, 6))
+        plt.plot(history_iters, history_train_loss, label='Train Loss')
+        plt.plot(history_iters, history_val_loss, label='Val Loss')
+        plt.xlabel('Iterations')
+        plt.ylabel('Loss')
+        plt.title('Training and Validation Loss Curve')
+        plt.legend()
+        plt.grid(True)
+        loss_curve_path = os.path.join(out_dir, "loss_curve.png")
+        plt.savefig(loss_curve_path)
+        plt.close()
+        
+        total_params = sum(p.numel() for p in raw_model.parameters())
+        trainable_params = sum(p.numel() for p in raw_model.parameters() if p.requires_grad)
+        
+        final_train_loss = f"{history_train_loss[-1]:.4f}" if history_train_loss else "N/A"
+        final_val_loss = f"{history_val_loss[-1]:.4f}" if history_val_loss else "N/A"
+        
+        report_md = f"""# Training Report
+
+## Architecture
+- **Block Size:** {model_config.block_size}
+- **Layers:** {model_config.n_layer}
+- **Heads:** {model_config.n_head}
+- **KV Heads:** {model_config.n_kv_head}
+- **Embedding Size:** {model_config.n_embd}
+- **Dropout:** {model_config.dropout}
+
+## Parameters
+- **Total Parameters:** {total_params:,}
+- **Trainable Parameters:** {trainable_params:,}
+
+## Training Details
+- **Total Iterations:** {train_config.max_iters}
+- **Training Time:** {training_time_seconds:.2f} seconds ({training_time_seconds / 60:.2f} minutes)
+- **Final Train Loss:** {final_train_loss}
+- **Final Val Loss:** {final_val_loss}
+- **Best Val Loss:** {best_val_loss:.4f}
+
+## Configuration
+```python
+{train_config.__dict__}
+```
+
+## Loss Curve
+![Loss Curve](./loss_curve.png)
+
+## Sample Outputs Generated During Training
+"""
+        for step_num, text in sample_outputs:
+            report_md += f"\n### Step {step_num}\n```text\n{text}\n```\n"
+
+        report_path = os.path.join(out_dir, "training_report.md")
+        with open(report_path, "w") as f:
+            f.write(report_md)
+        logger.info(f"Training report saved to {report_path}")
+
         if train_config.wandb_log:
             wandb.finish()
 
