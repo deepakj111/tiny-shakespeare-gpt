@@ -28,7 +28,7 @@ tiny-shakespeare-gpt/
 │   └── tiny_shakespeare_gpt/
 │       ├── config.py      # Dataclasses for model and training hyperparameters
 │       ├── dataset.py     # Memory-mapped PyTorch dataset
-│       ├── model.py       # Core GPT architecture (RoPE, GQA, SwiGLU, etc.)
+│       ├── model.py       # Core GPT architecture (RoPE, GQA, SwiGLU, MoE, etc.)
 │       └── tokenizer.py   # BPE tokenizer wrapper
 ├── scripts/
 │   ├── download_dataset.py
@@ -76,7 +76,7 @@ The script will periodically evaluate the model on the training and validation s
 All hyperparameters and settings are managed in `src/tiny_shakespeare_gpt/config.py` via the `TrainConfig` dataclass. You can adjust `max_iters`, `block_size`, `batch_size`, and other training parameters there.
 
 - **Experiment Tracking**: Set `wandb_log = True` in `config.py` to automatically stream your metrics and generated text samples to your [Weights & Biases](https://wandb.ai/) dashboard.
-- **Resuming Training**: If your training run crashes or is preempted, simply set `resume = True` in `config.py`. The script will automatically load `out/ckpt.pt`, restore the optimizer state, and precisely re-seed the RNG state so it picks up exactly where it left off.
+- **Resuming Training**: If your training run crashes or is preempted, simply set `resume = True` in `config.py`. The script will automatically load `out/model.safetensors` and `out/ckpt_meta.pt`, restore the optimizer state, and precisely re-seed the RNG state so it picks up exactly where it left off.
 
 ## Multi-GPU Distributed Training (DDP)
 
@@ -167,11 +167,12 @@ It is important to understand what this model is and what it is not:
 - **Rotary Position Embeddings (RoPE)**: Replaces absolute positional embeddings with relative ones for better generalization.
 - **Grouped-Query Attention (GQA)**: Reduces the number of key/value heads for faster inference and lower memory consumption.
 - **RMSNorm**: An alternative to standard LayerNorm.
-- **SwiGLU FeedForward**: Replaces the standard ReLU/GELU MLPs with Swish-Gated Linear Units.
+- **Sparse Mixture of Experts (MoE)**: Replaces the standard dense MLP block, allowing the model to scale its parameter count efficiently.
+- **SwiGLU FeedForward**: Replaces the standard ReLU/GELU MLPs with Swish-Gated Linear Units within the MoE experts.
 - **Flash Attention**: Uses PyTorch's scaled dot product attention for highly optimized, memory-efficient exact attention.
 - **Weight Tying**: Shares weights between the token embedding layer and the final output layer.
 - **Residual Scaling**: Custom initialization (`1/sqrt(2 * n_layer)`) on residual projections to prevent variance explosion.
-- **Vocabulary Padding**: Pads the GPT-2 vocabulary to a multiple of 64.
+- **Vocabulary Padding**: Pads `tiktoken`'s `o200k_base` vocabulary to a multiple of 64.
 
 ### Training Optimizations
 
