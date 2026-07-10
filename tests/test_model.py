@@ -1,3 +1,9 @@
+"""
+Unit tests for the GPT model architecture components.
+Includes tests for configuration, RMSNorm, SwiGLU FeedForward, RoPE, 
+Causal Self Attention, Blocks, and the complete GPT model.
+"""
+
 import torch
 from tiny_shakespeare_gpt.model import (
     GPTConfig,

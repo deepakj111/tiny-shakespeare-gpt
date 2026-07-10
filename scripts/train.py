@@ -431,6 +431,8 @@ def main():
 - **KV Heads:** {model_config.n_kv_head}
 - **Embedding Size:** {model_config.n_embd}
 - **Dropout:** {model_config.dropout}
+- **Total Experts (MoE):** {model_config.n_experts}
+- **Experts Per Token:** {model_config.num_experts_per_tok}
 
 ## Parameters
 - **Total Parameters:** {total_params:,}

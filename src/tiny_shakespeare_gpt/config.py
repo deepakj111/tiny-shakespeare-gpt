@@ -1,3 +1,7 @@
+"""
+Configuration dataclasses for training and hyperparameters.
+"""
+
 from dataclasses import dataclass
 
 
