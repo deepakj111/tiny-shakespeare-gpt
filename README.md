@@ -69,7 +69,7 @@ Thanks to `pyproject.toml` project scripts, you can simply run:
 uv run train
 ```
 
-The script will periodically evaluate the model on the training and validation sets, print the losses, and generate a sample text to qualitatively track the model's progress. 
+The script will periodically evaluate the model on the training and validation sets, print the losses, and generate a sample text to qualitatively track the model's progress. At the end of the training run, it automatically generates a `loss_curve.png` plot and a comprehensive `training_report.md` in the `out/` directory summarizing the model's architecture, parameters, and loss metrics.
 
 ### Configuration & Resumability
 
@@ -141,15 +141,16 @@ Run the container:
 docker run -p 8000:8000 tiny-shakespeare-gpt
 ```
 
-## Code Quality Enforcement
+## Code Quality & Testing
 
-The codebase enforces strict linting, formatting, and static type-checking using `ruff` and `mypy`. 
+The codebase enforces strict linting, formatting, and static type-checking using `ruff` and `mypy`. It also includes a comprehensive suite of unit tests for the architecture components using `pytest`.
 
-Run the automated checks:
+Run the automated checks and tests:
 ```bash
 uv run ruff check .
 uv run ruff format .
 uv run mypy src/ scripts/
+uv run pytest tests/
 ```
 
 ## Limitations & Model Scope
