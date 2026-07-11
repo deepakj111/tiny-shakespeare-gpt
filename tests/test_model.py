@@ -1,6 +1,6 @@
 """
 Unit tests for the GPT model architecture components.
-Includes tests for configuration, RMSNorm, SwiGLU FeedForward, RoPE, 
+Includes tests for configuration, RMSNorm, SwiGLU FeedForward, RoPE,
 Causal Self Attention, Blocks, and the complete GPT model.
 """
 
