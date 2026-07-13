@@ -202,6 +202,8 @@ def main():
         n_kv_head=train_config.n_kv_head,
         n_embd=train_config.n_embd,
         dropout=train_config.dropout,
+        n_experts=train_config.n_experts,
+        num_experts_per_tok=train_config.num_experts_per_tok,
     )
     model = GPT(model_config)
     model.to(device)
