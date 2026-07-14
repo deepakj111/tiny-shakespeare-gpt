@@ -9,7 +9,8 @@ import torch
 import torch.nn.functional as F
 from typing import Any
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse, RedirectResponse
+from fastapi.responses import StreamingResponse, RedirectResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from contextlib import asynccontextmanager, nullcontext
 from tiny_shakespeare_gpt.model import GPT, GPTConfig
@@ -58,6 +59,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Tiny Shakespeare GPT API", lifespan=lifespan)
+
+static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 
 class GenerateRequest(BaseModel):
@@ -149,7 +153,7 @@ async def generate_stream(request: GenerateRequest, model: GPT, tokenizer, devic
 
 @app.get("/")
 async def root():
-    return RedirectResponse(url="/docs")
+    return FileResponse(os.path.join(static_dir, "index.html"))
 
 
 @app.post("/generate", response_model=GenerateResponse)
