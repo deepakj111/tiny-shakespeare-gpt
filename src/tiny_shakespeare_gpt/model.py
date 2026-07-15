@@ -194,8 +194,8 @@ class CausalSelfAttention(nn.Module):
         x: torch.Tensor,
         freqs_cis: torch.Tensor,
         start_pos: int = 0,
-        use_cache: bool = False,
-    ) -> torch.Tensor:
+        kv_cache: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
         B, T, C = x.shape
 
         xq = self.wq(x).view(B, T, self.n_head, self.head_dim)
@@ -204,25 +204,16 @@ class CausalSelfAttention(nn.Module):
 
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis)
 
-        if use_cache:
-            if start_pos == 0 or not hasattr(self, "cache_k"):
-                # Initialize cache lazily
-                self.cache_k = torch.zeros(
-                    (B, self.max_seq_len, self.n_kv_head, self.head_dim),
-                    dtype=xk.dtype,
-                    device=xk.device,
-                )
-                self.cache_v = torch.zeros(
-                    (B, self.max_seq_len, self.n_kv_head, self.head_dim),
-                    dtype=xv.dtype,
-                    device=xv.device,
-                )
+        new_kv_cache = None
+        if kv_cache is not None:
+            cache_k, cache_v = kv_cache
+            
+            cache_k[:B, start_pos : start_pos + T] = xk
+            cache_v[:B, start_pos : start_pos + T] = xv
 
-            self.cache_k[:B, start_pos : start_pos + T] = xk
-            self.cache_v[:B, start_pos : start_pos + T] = xv
-
-            xk = self.cache_k[:B, : start_pos + T]
-            xv = self.cache_v[:B, : start_pos + T]
+            xk = cache_k[:B, : start_pos + T]
+            xv = cache_v[:B, : start_pos + T]
+            new_kv_cache = (cache_k, cache_v)
 
         # Expand KV heads to match query heads for GQA
         if self.n_kv_head < self.n_head:
@@ -245,7 +236,7 @@ class CausalSelfAttention(nn.Module):
         )
 
         y = y.transpose(1, 2).contiguous().view(B, T, C)
-        return self.resid_dropout(self.wo(y))
+        return self.resid_dropout(self.wo(y)), new_kv_cache
 
 
 class Block(nn.Module):
@@ -263,11 +254,12 @@ class Block(nn.Module):
         x: torch.Tensor,
         freqs_cis: torch.Tensor,
         start_pos: int = 0,
-        use_cache: bool = False,
-    ) -> torch.Tensor:
-        x = x + self.attn(self.norm1(x), freqs_cis, start_pos, use_cache)
+        kv_cache: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
+        attn_out, new_kv_cache = self.attn(self.norm1(x), freqs_cis, start_pos, kv_cache)
+        x = x + attn_out
         x = x + self.mlp(self.norm2(x))
-        return x
+        return x, new_kv_cache
 
 
 class GPT(nn.Module):
@@ -314,8 +306,8 @@ class GPT(nn.Module):
         idx: torch.Tensor,
         targets: torch.Tensor | None = None,
         start_pos: int = 0,
-        use_cache: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        kv_caches: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[tuple[torch.Tensor, torch.Tensor]] | None]:
         B, T = idx.shape
 
         # Token embeddings
@@ -325,9 +317,14 @@ class GPT(nn.Module):
         # Slice rotary embeddings for the current sequence length
         freqs_cis = self.freqs_cis[start_pos : start_pos + T]  # type: ignore
 
+        new_kv_caches = [] if kv_caches is not None else None
+
         # Pass through transformer blocks
-        for block in self.blocks:
-            x = block(x, freqs_cis, start_pos, use_cache)
+        for i, block in enumerate(self.blocks):
+            block_kv_cache = kv_caches[i] if kv_caches is not None else None
+            x, new_block_cache = block(x, freqs_cis, start_pos, block_kv_cache)
+            if new_kv_caches is not None and new_block_cache is not None:
+                new_kv_caches.append(new_block_cache)
 
         x = self.norm(x)
 
@@ -344,7 +341,7 @@ class GPT(nn.Module):
             )  # using list [-1] to preserve the time dim
             loss = None
 
-        return logits, loss
+        return logits, loss, new_kv_caches
 
     def configure_optimizers(
         self,
@@ -395,7 +392,18 @@ class GPT(nn.Module):
             idx = idx[:, -self.config.block_size :]
             T = idx.shape[1]
 
-        logits, _ = self(idx, start_pos=0, use_cache=True)
+        # Initialize KV cache
+        kv_caches = []
+        for _ in self.blocks:
+            cache_k = torch.zeros(
+                (B, self.config.block_size, self.config.n_kv_head, self.config.n_embd // self.config.n_head),
+                dtype=self.tok_emb.weight.dtype,
+                device=idx.device,
+            )
+            cache_v = torch.zeros_like(cache_k)
+            kv_caches.append((cache_k, cache_v))
+
+        logits, _, kv_caches = self(idx, start_pos=0, kv_caches=kv_caches)
 
         next_token_logits = logits[:, -1, :] / temperature
         if top_k is not None:
@@ -411,7 +419,7 @@ class GPT(nn.Module):
             if start_pos >= self.config.block_size:
                 break  # exceeded maximum context length
 
-            logits, _ = self(idx_next, start_pos=start_pos, use_cache=True)
+            logits, _, kv_caches = self(idx_next, start_pos=start_pos, kv_caches=kv_caches)
 
             next_token_logits = logits[:, -1, :] / temperature
             if top_k is not None:
@@ -424,11 +432,5 @@ class GPT(nn.Module):
 
             generated_ids.append(idx_next)
             start_pos += 1
-
-        # Clear cache
-        for block in self.blocks:
-            if hasattr(block.attn, "cache_k"):
-                del block.attn.cache_k  # type: ignore
-                del block.attn.cache_v  # type: ignore
 
         return torch.cat([idx] + generated_ids, dim=1)

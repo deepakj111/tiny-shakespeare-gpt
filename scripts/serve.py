@@ -5,30 +5,42 @@ FastAPI Server to serve the GPT model.
 import os
 import json
 import asyncio
+import logging
 import torch
 import torch.nn.functional as F
-from typing import Any
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse, RedirectResponse, FileResponse
+from typing import AsyncGenerator
+from fastapi import FastAPI, HTTPException, Depends, Request
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from pydantic_settings import BaseSettings
 from contextlib import asynccontextmanager, nullcontext
 from tiny_shakespeare_gpt.model import GPT, GPTConfig
 from tiny_shakespeare_gpt.tokenizer import BPETokenizer
 
-# Global state
-app_state: dict[str, Any] = {}
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:\t  %(message)s")
+logger = logging.getLogger(__name__)
+
+class ServerSettings(BaseSettings):
+    host: str = "0.0.0.0"
+    port: int = 8000
+    model_dir: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "out")
+
+    class Config:
+        env_file = ".env"
+
+settings = ServerSettings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Setup
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
+    logger.info(f"Using device: {device}")
 
-    out_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "out")
-    model_ckpt_path = os.path.join(out_dir, "model.safetensors")
-    meta_ckpt_path = os.path.join(out_dir, "ckpt_meta.pt")
+    model_ckpt_path = os.path.join(settings.model_dir, "model.safetensors")
+    meta_ckpt_path = os.path.join(settings.model_dir, "ckpt_meta.pt")
 
     if not os.path.exists(model_ckpt_path) or not os.path.exists(meta_ckpt_path):
         raise RuntimeError(
@@ -42,20 +54,20 @@ async def lifespan(app: FastAPI):
     model = GPT(config)
 
     import safetensors.torch
-
     safetensors.torch.load_model(model, model_ckpt_path)
     model.eval()
     model.to(device)
 
     tokenizer = BPETokenizer()
 
-    app_state["model"] = model
-    app_state["tokenizer"] = tokenizer
-    app_state["device"] = device
+    app.state.model = model
+    app.state.tokenizer = tokenizer
+    app.state.device = device
 
+    logger.info("Model and tokenizer loaded successfully.")
     yield
     # Teardown
-    app_state.clear()
+    logger.info("Shutting down server.")
 
 
 app = FastAPI(title="Tiny Shakespeare GPT API", lifespan=lifespan)
@@ -77,7 +89,27 @@ class GenerateResponse(BaseModel):
     text: str
 
 
-async def generate_stream(request: GenerateRequest, model: GPT, tokenizer, device: str):
+def get_model(request: Request) -> GPT:
+    if not hasattr(request.app.state, "model"):
+        raise HTTPException(status_code=503, detail="Model not loaded yet")
+    return request.app.state.model
+
+
+def get_tokenizer(request: Request) -> BPETokenizer:
+    if not hasattr(request.app.state, "tokenizer"):
+        raise HTTPException(status_code=503, detail="Tokenizer not loaded yet")
+    return request.app.state.tokenizer
+
+
+def get_device(request: Request) -> str:
+    if not hasattr(request.app.state, "device"):
+        return "cpu"
+    return request.app.state.device
+
+
+async def generate_stream(
+    request: GenerateRequest, model: GPT, tokenizer: BPETokenizer, device: str
+) -> AsyncGenerator[str, None]:
     torch.manual_seed(request.seed)
     if device.startswith("cuda"):
         torch.cuda.manual_seed(request.seed)
@@ -102,7 +134,18 @@ async def generate_stream(request: GenerateRequest, model: GPT, tokenizer, devic
 
     with torch.no_grad():
         with ctx:
-            logits, _ = model(x, start_pos=0, use_cache=True)
+            # Initialize KV cache
+            kv_caches = []
+            for _ in model.blocks:
+                cache_k = torch.zeros(
+                    (B, model.config.block_size, model.config.n_kv_head, model.config.n_embd // model.config.n_head),
+                    dtype=model.tok_emb.weight.dtype,
+                    device=device,
+                )
+                cache_v = torch.zeros_like(cache_k)
+                kv_caches.append((cache_k, cache_v))
+
+            logits, _, kv_caches = model(x, start_pos=0, kv_caches=kv_caches)
 
             next_token_logits = logits[:, -1, :] / request.temperature
             if request.top_k is not None:
@@ -124,7 +167,7 @@ async def generate_stream(request: GenerateRequest, model: GPT, tokenizer, devic
                 if start_pos >= model.config.block_size:
                     break
 
-                logits, _ = model(idx_next, start_pos=start_pos, use_cache=True)
+                logits, _, kv_caches = model(idx_next, start_pos=start_pos, kv_caches=kv_caches)
 
                 next_token_logits = logits[:, -1, :] / request.temperature
                 if request.top_k is not None:
@@ -142,12 +185,6 @@ async def generate_stream(request: GenerateRequest, model: GPT, tokenizer, devic
                 yield f"data: {json.dumps({'text': token_str})}\n\n"
                 await asyncio.sleep(0)
 
-            # Clear cache
-            for block in model.blocks:
-                if hasattr(block.attn, "cache_k"):
-                    del block.attn.cache_k  # type: ignore
-                    del block.attn.cache_v  # type: ignore
-
     yield "data: [DONE]\n\n"
 
 
@@ -156,15 +193,18 @@ async def root():
     return FileResponse(os.path.join(static_dir, "index.html"))
 
 
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
 @app.post("/generate", response_model=GenerateResponse)
-async def generate_text(request: GenerateRequest):
-    model = app_state.get("model")
-    tokenizer = app_state.get("tokenizer")
-    device = str(app_state.get("device", "cpu"))
-
-    if not model or not tokenizer:
-        raise HTTPException(status_code=503, detail="Model not loaded yet")
-
+async def generate_text(
+    request: GenerateRequest,
+    model: GPT = Depends(get_model),
+    tokenizer: BPETokenizer = Depends(get_tokenizer),
+    device: str = Depends(get_device),
+):
     if request.stream:
         return StreamingResponse(
             generate_stream(request, model, tokenizer, device),
@@ -206,8 +246,7 @@ async def generate_text(request: GenerateRequest):
 
 def main():
     import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=settings.host, port=settings.port)
 
 
 if __name__ == "__main__":
