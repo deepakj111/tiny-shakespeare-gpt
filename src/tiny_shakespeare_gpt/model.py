@@ -380,6 +380,7 @@ class GPT(nn.Module):
         max_new_tokens: int,
         temperature: float = 1.0,
         top_k: int | None = None,
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         """
         Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
@@ -410,7 +411,7 @@ class GPT(nn.Module):
             v, _ = torch.topk(next_token_logits, min(top_k, next_token_logits.size(-1)))
             next_token_logits[next_token_logits < v[:, [-1]]] = -float("Inf")
         probs = F.softmax(next_token_logits, dim=-1)
-        idx_next = torch.multinomial(probs, num_samples=1)
+        idx_next = torch.multinomial(probs, num_samples=1, generator=generator)
 
         generated_ids = [idx_next]
         start_pos = T
@@ -428,7 +429,7 @@ class GPT(nn.Module):
                 )
                 next_token_logits[next_token_logits < v[:, [-1]]] = -float("Inf")
             probs = F.softmax(next_token_logits, dim=-1)
-            idx_next = torch.multinomial(probs, num_samples=1)
+            idx_next = torch.multinomial(probs, num_samples=1, generator=generator)
 
             generated_ids.append(idx_next)
             start_pos += 1

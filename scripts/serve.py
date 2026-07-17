@@ -62,6 +62,36 @@ class InferenceEngine:
         self.tokenizer = BPETokenizer()
         logger.info("Model and tokenizer loaded successfully.")
 
+    def generate(self, prompt: str, max_new_tokens: int, temperature: float, top_k: int, seed: int) -> str:
+        generator = torch.Generator(device=self.device)
+        generator.manual_seed(seed)
+
+        start_prompt = prompt if prompt else "\n"
+        start_ids = self.tokenizer.encode(start_prompt)
+        x = torch.tensor(start_ids, dtype=torch.long, device=self.device)[None, ...]
+
+        ctx = (
+            torch.autocast(
+                device_type=self.device,
+                dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+            )
+            if self.device.startswith("cuda")
+            else nullcontext()
+        )
+
+        with torch.no_grad():
+            with ctx:
+                y = self.model.generate(
+                    x,
+                    max_new_tokens,
+                    temperature=temperature,
+                    top_k=top_k,
+                    generator=generator,
+                )
+
+        output_text = self.tokenizer.decode(y[0].tolist())
+        return output_text[len(start_prompt) :]
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -200,6 +230,8 @@ async def health():
     return {"status": "ok"}
 
 
+import anyio
+
 @app.post("/generate", response_model=GenerateResponse)
 async def generate_text(
     request: GenerateRequest,
@@ -211,37 +243,16 @@ async def generate_text(
             media_type="text/event-stream",
         )
     else:
-        # Non-streaming fallback
-        torch.manual_seed(request.seed)
-        if engine.device.startswith("cuda"):
-            torch.cuda.manual_seed(request.seed)
-
-        start_prompt = request.prompt if request.prompt else "\n"
-        start_ids = engine.tokenizer.encode(start_prompt)
-        x = torch.tensor(start_ids, dtype=torch.long, device=engine.device)[None, ...]
-
-        ctx = (
-            torch.autocast(
-                device_type=engine.device,
-                dtype=torch.bfloat16
-                if torch.cuda.is_bf16_supported()
-                else torch.float16,
-            )
-            if engine.device.startswith("cuda")
-            else nullcontext()
+        # Offload non-streaming inference to a background thread
+        output_text = await anyio.to_thread.run_sync(
+            engine.generate,
+            request.prompt,
+            request.max_new_tokens,
+            request.temperature,
+            request.top_k,
+            request.seed,
         )
-
-        with torch.no_grad():
-            with ctx:
-                y = engine.model.generate(
-                    x,
-                    request.max_new_tokens,
-                    temperature=request.temperature,
-                    top_k=request.top_k,
-                )
-
-        output_text = engine.tokenizer.decode(y[0].tolist())
-        return GenerateResponse(text=output_text[len(start_prompt) :])
+        return GenerateResponse(text=output_text)
 
 
 def main():
