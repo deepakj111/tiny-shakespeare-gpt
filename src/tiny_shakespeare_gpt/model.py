@@ -322,9 +322,9 @@ class GPT(nn.Module):
 
         # Slice rotary embeddings for the current sequence length
         freqs_cis = self.freqs_cis[start_pos : start_pos + T]  # type: ignore
-
-        new_kv_caches = [] if kv_caches is not None else None
-
+        new_kv_caches: list[tuple[torch.Tensor, torch.Tensor]] | None = (
+            [] if kv_caches is not None else None
+        )
         # Pass through transformer blocks
         for i, block in enumerate(self.blocks):
             block_kv_cache = kv_caches[i] if kv_caches is not None else None
