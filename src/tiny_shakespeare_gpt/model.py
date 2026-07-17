@@ -207,7 +207,7 @@ class CausalSelfAttention(nn.Module):
         new_kv_cache = None
         if kv_cache is not None:
             cache_k, cache_v = kv_cache
-            
+
             cache_k[:B, start_pos : start_pos + T] = xk
             cache_v[:B, start_pos : start_pos + T] = xv
 
@@ -256,7 +256,9 @@ class Block(nn.Module):
         start_pos: int = 0,
         kv_cache: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor] | None]:
-        attn_out, new_kv_cache = self.attn(self.norm1(x), freqs_cis, start_pos, kv_cache)
+        attn_out, new_kv_cache = self.attn(
+            self.norm1(x), freqs_cis, start_pos, kv_cache
+        )
         x = x + attn_out
         x = x + self.mlp(self.norm2(x))
         return x, new_kv_cache
@@ -307,7 +309,11 @@ class GPT(nn.Module):
         targets: torch.Tensor | None = None,
         start_pos: int = 0,
         kv_caches: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, list[tuple[torch.Tensor, torch.Tensor]] | None]:
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor | None,
+        list[tuple[torch.Tensor, torch.Tensor]] | None,
+    ]:
         B, T = idx.shape
 
         # Token embeddings
@@ -397,7 +403,12 @@ class GPT(nn.Module):
         kv_caches = []
         for _ in self.blocks:
             cache_k = torch.zeros(
-                (B, self.config.block_size, self.config.n_kv_head, self.config.n_embd // self.config.n_head),
+                (
+                    B,
+                    self.config.block_size,
+                    self.config.n_kv_head,
+                    self.config.n_embd // self.config.n_head,
+                ),
                 dtype=self.tok_emb.weight.dtype,
                 device=idx.device,
             )
@@ -420,7 +431,9 @@ class GPT(nn.Module):
             if start_pos >= self.config.block_size:
                 break  # exceeded maximum context length
 
-            logits, _, kv_caches = self(idx_next, start_pos=start_pos, kv_caches=kv_caches)
+            logits, _, kv_caches = self(
+                idx_next, start_pos=start_pos, kv_caches=kv_caches
+            )
 
             next_token_logits = logits[:, -1, :] / temperature
             if top_k is not None:

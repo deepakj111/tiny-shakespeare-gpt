@@ -26,6 +26,7 @@ from tiny_shakespeare_gpt.tokenizer import BPETokenizer
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:\t  %(message)s")
 logger = logging.getLogger(__name__)
 
+
 class ServerSettings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
@@ -35,6 +36,7 @@ class ServerSettings(BaseSettings):
 
     class Config:
         env_file = ".env"
+
 
 settings = ServerSettings()
 
@@ -59,6 +61,7 @@ class InferenceEngine:
         self.model = GPT(config)
 
         import safetensors.torch
+
         safetensors.torch.load_model(self.model, model_ckpt_path)
         self.model.eval()
         self.model.to(self.device)
@@ -66,7 +69,14 @@ class InferenceEngine:
         self.tokenizer = BPETokenizer()
         logger.info("Model and tokenizer loaded successfully.")
 
-    def generate(self, prompt: str, max_new_tokens: int, temperature: float, top_k: int, seed: int) -> str:
+    def generate(
+        self,
+        prompt: str,
+        max_new_tokens: int,
+        temperature: float,
+        top_k: int,
+        seed: int,
+    ) -> str:
         generator = torch.Generator(device=self.device)
         generator.manual_seed(seed)
 
@@ -77,7 +87,9 @@ class InferenceEngine:
         ctx = (
             torch.autocast(
                 device_type=self.device,
-                dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+                dtype=torch.bfloat16
+                if torch.cuda.is_bf16_supported()
+                else torch.float16,
             )
             if self.device.startswith("cuda")
             else nullcontext()
@@ -97,7 +109,13 @@ class InferenceEngine:
         return output_text[len(start_prompt) :]
 
     def generate_stream_worker(
-        self, prompt: str, max_new_tokens: int, temperature: float, top_k: int, seed: int, q: queue.Queue
+        self,
+        prompt: str,
+        max_new_tokens: int,
+        temperature: float,
+        top_k: int,
+        seed: int,
+        q: queue.Queue,
     ):
         try:
             generator = torch.Generator(device=self.device)
@@ -115,7 +133,9 @@ class InferenceEngine:
             ctx = (
                 torch.autocast(
                     device_type=self.device,
-                    dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+                    dtype=torch.bfloat16
+                    if torch.cuda.is_bf16_supported()
+                    else torch.float16,
                 )
                 if self.device.startswith("cuda")
                 else nullcontext()
@@ -127,23 +147,34 @@ class InferenceEngine:
                     kv_caches = []
                     for _ in self.model.blocks:
                         cache_k = torch.zeros(
-                            (B, self.model.config.block_size, self.model.config.n_kv_head, self.model.config.n_embd // self.model.config.n_head),
+                            (
+                                B,
+                                self.model.config.block_size,
+                                self.model.config.n_kv_head,
+                                self.model.config.n_embd // self.model.config.n_head,
+                            ),
                             dtype=self.model.tok_emb.weight.dtype,
                             device=self.device,
                         )
                         cache_v = torch.zeros_like(cache_k)
                         kv_caches.append((cache_k, cache_v))
 
-                    logits, _, kv_caches = self.model(x, start_pos=0, kv_caches=kv_caches)
+                    logits, _, kv_caches = self.model(
+                        x, start_pos=0, kv_caches=kv_caches
+                    )
 
                     next_token_logits = logits[:, -1, :] / temperature
                     if top_k is not None:
                         v, _ = torch.topk(
                             next_token_logits, min(top_k, next_token_logits.size(-1))
                         )
-                        next_token_logits[next_token_logits < v[:, [-1]]] = -float("Inf")
+                        next_token_logits[next_token_logits < v[:, [-1]]] = -float(
+                            "Inf"
+                        )
                     probs = F.softmax(next_token_logits, dim=-1)
-                    idx_next = torch.multinomial(probs, num_samples=1, generator=generator)
+                    idx_next = torch.multinomial(
+                        probs, num_samples=1, generator=generator
+                    )
 
                     start_pos = T
 
@@ -155,7 +186,9 @@ class InferenceEngine:
                         if start_pos >= self.model.config.block_size:
                             break
 
-                        logits, _, kv_caches = self.model(idx_next, start_pos=start_pos, kv_caches=kv_caches)
+                        logits, _, kv_caches = self.model(
+                            idx_next, start_pos=start_pos, kv_caches=kv_caches
+                        )
 
                         next_token_logits = logits[:, -1, :] / temperature
                         if top_k is not None:
@@ -163,9 +196,13 @@ class InferenceEngine:
                                 next_token_logits,
                                 min(top_k, next_token_logits.size(-1)),
                             )
-                            next_token_logits[next_token_logits < v[:, [-1]]] = -float("Inf")
+                            next_token_logits[next_token_logits < v[:, [-1]]] = -float(
+                                "Inf"
+                            )
                         probs = F.softmax(next_token_logits, dim=-1)
-                        idx_next = torch.multinomial(probs, num_samples=1, generator=generator)
+                        idx_next = torch.multinomial(
+                            probs, num_samples=1, generator=generator
+                        )
 
                         start_pos += 1
 
@@ -230,7 +267,6 @@ def get_semaphore(request: Request) -> asyncio.Semaphore:
     return request.app.state.generate_semaphore
 
 
-
 async def generate_stream(
     request: GenerateRequest, engine: InferenceEngine
 ) -> AsyncGenerator[str, None]:
@@ -267,9 +303,9 @@ async def health():
     return {"status": "ok"}
 
 
-
-
-async def stream_with_semaphore(generator: AsyncGenerator[str, None], sem: asyncio.Semaphore) -> AsyncGenerator[str, None]:
+async def stream_with_semaphore(
+    generator: AsyncGenerator[str, None], sem: asyncio.Semaphore
+) -> AsyncGenerator[str, None]:
     try:
         async for chunk in generator:
             yield chunk
@@ -308,6 +344,7 @@ async def generate_text(
 
 def main():
     import uvicorn
+
     uvicorn.run(app, host=settings.host, port=settings.port)
 
 
