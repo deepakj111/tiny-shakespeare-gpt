@@ -12,6 +12,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 from contextlib import asynccontextmanager, nullcontext
@@ -26,6 +27,7 @@ class ServerSettings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     model_dir: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "out")
+    cors_origins: list[str] = ["*"]
 
     class Config:
         env_file = ".env"
@@ -33,44 +35,56 @@ class ServerSettings(BaseSettings):
 settings = ServerSettings()
 
 
+class InferenceEngine:
+    def __init__(self, model_dir: str):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Using device: {self.device}")
+
+        model_ckpt_path = os.path.join(model_dir, "model.safetensors")
+        meta_ckpt_path = os.path.join(model_dir, "ckpt_meta.pt")
+
+        if not os.path.exists(model_ckpt_path) or not os.path.exists(meta_ckpt_path):
+            raise RuntimeError(
+                f"Checkpoint not found at {model_ckpt_path} or {meta_ckpt_path}. Run scripts/train.py first."
+            )
+
+        torch.serialization.add_safe_globals([GPTConfig])
+        meta = torch.load(meta_ckpt_path, map_location=self.device, weights_only=True)
+
+        config = meta["config"]
+        self.model = GPT(config)
+
+        import safetensors.torch
+        safetensors.torch.load_model(self.model, model_ckpt_path)
+        self.model.eval()
+        self.model.to(self.device)
+
+        self.tokenizer = BPETokenizer()
+        logger.info("Model and tokenizer loaded successfully.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Setup
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Using device: {device}")
-
-    model_ckpt_path = os.path.join(settings.model_dir, "model.safetensors")
-    meta_ckpt_path = os.path.join(settings.model_dir, "ckpt_meta.pt")
-
-    if not os.path.exists(model_ckpt_path) or not os.path.exists(meta_ckpt_path):
-        raise RuntimeError(
-            f"Checkpoint not found at {model_ckpt_path} or {meta_ckpt_path}. Run scripts/train.py first."
-        )
-
-    torch.serialization.add_safe_globals([GPTConfig])
-    meta = torch.load(meta_ckpt_path, map_location=device, weights_only=True)
-
-    config = meta["config"]
-    model = GPT(config)
-
-    import safetensors.torch
-    safetensors.torch.load_model(model, model_ckpt_path)
-    model.eval()
-    model.to(device)
-
-    tokenizer = BPETokenizer()
-
-    app.state.model = model
-    app.state.tokenizer = tokenizer
-    app.state.device = device
-
-    logger.info("Model and tokenizer loaded successfully.")
+    engine = InferenceEngine(settings.model_dir)
+    app.state.engine = engine
     yield
     # Teardown
     logger.info("Shutting down server.")
+    del engine
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 app = FastAPI(title="Tiny Shakespeare GPT API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -89,46 +103,34 @@ class GenerateResponse(BaseModel):
     text: str
 
 
-def get_model(request: Request) -> GPT:
-    if not hasattr(request.app.state, "model"):
-        raise HTTPException(status_code=503, detail="Model not loaded yet")
-    return request.app.state.model
-
-
-def get_tokenizer(request: Request) -> BPETokenizer:
-    if not hasattr(request.app.state, "tokenizer"):
-        raise HTTPException(status_code=503, detail="Tokenizer not loaded yet")
-    return request.app.state.tokenizer
-
-
-def get_device(request: Request) -> str:
-    if not hasattr(request.app.state, "device"):
-        return "cpu"
-    return request.app.state.device
+def get_engine(request: Request) -> InferenceEngine:
+    if not hasattr(request.app.state, "engine"):
+        raise HTTPException(status_code=503, detail="Inference engine not loaded yet")
+    return request.app.state.engine
 
 
 async def generate_stream(
-    request: GenerateRequest, model: GPT, tokenizer: BPETokenizer, device: str
+    request: GenerateRequest, engine: InferenceEngine
 ) -> AsyncGenerator[str, None]:
     torch.manual_seed(request.seed)
-    if device.startswith("cuda"):
+    if engine.device.startswith("cuda"):
         torch.cuda.manual_seed(request.seed)
 
     start_prompt = request.prompt if request.prompt else "\n"
-    start_ids = tokenizer.encode(start_prompt)
-    x = torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...]
+    start_ids = engine.tokenizer.encode(start_prompt)
+    x = torch.tensor(start_ids, dtype=torch.long, device=engine.device)[None, ...]
 
     B, T = x.shape
-    if T > model.config.block_size:
-        x = x[:, -model.config.block_size :]
+    if T > engine.model.config.block_size:
+        x = x[:, -engine.model.config.block_size :]
         T = x.shape[1]
 
     ctx = (
         torch.autocast(
-            device_type=device,
+            device_type=engine.device,
             dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
         )
-        if device.startswith("cuda")
+        if engine.device.startswith("cuda")
         else nullcontext()
     )
 
@@ -136,16 +138,16 @@ async def generate_stream(
         with ctx:
             # Initialize KV cache
             kv_caches = []
-            for _ in model.blocks:
+            for _ in engine.model.blocks:
                 cache_k = torch.zeros(
-                    (B, model.config.block_size, model.config.n_kv_head, model.config.n_embd // model.config.n_head),
-                    dtype=model.tok_emb.weight.dtype,
-                    device=device,
+                    (B, engine.model.config.block_size, engine.model.config.n_kv_head, engine.model.config.n_embd // engine.model.config.n_head),
+                    dtype=engine.model.tok_emb.weight.dtype,
+                    device=engine.device,
                 )
                 cache_v = torch.zeros_like(cache_k)
                 kv_caches.append((cache_k, cache_v))
 
-            logits, _, kv_caches = model(x, start_pos=0, kv_caches=kv_caches)
+            logits, _, kv_caches = engine.model(x, start_pos=0, kv_caches=kv_caches)
 
             next_token_logits = logits[:, -1, :] / request.temperature
             if request.top_k is not None:
@@ -159,15 +161,15 @@ async def generate_stream(
             start_pos = T
 
             # Yield first token
-            token_str = tokenizer.decode(idx_next[0].tolist())
+            token_str = engine.tokenizer.decode(idx_next[0].tolist())
             yield f"data: {json.dumps({'text': token_str})}\n\n"
             await asyncio.sleep(0)
 
             for _ in range(1, request.max_new_tokens):
-                if start_pos >= model.config.block_size:
+                if start_pos >= engine.model.config.block_size:
                     break
 
-                logits, _, kv_caches = model(idx_next, start_pos=start_pos, kv_caches=kv_caches)
+                logits, _, kv_caches = engine.model(idx_next, start_pos=start_pos, kv_caches=kv_caches)
 
                 next_token_logits = logits[:, -1, :] / request.temperature
                 if request.top_k is not None:
@@ -181,7 +183,7 @@ async def generate_stream(
 
                 start_pos += 1
 
-                token_str = tokenizer.decode(idx_next[0].tolist())
+                token_str = engine.tokenizer.decode(idx_next[0].tolist())
                 yield f"data: {json.dumps({'text': token_str})}\n\n"
                 await asyncio.sleep(0)
 
@@ -201,46 +203,44 @@ async def health():
 @app.post("/generate", response_model=GenerateResponse)
 async def generate_text(
     request: GenerateRequest,
-    model: GPT = Depends(get_model),
-    tokenizer: BPETokenizer = Depends(get_tokenizer),
-    device: str = Depends(get_device),
+    engine: InferenceEngine = Depends(get_engine),
 ):
     if request.stream:
         return StreamingResponse(
-            generate_stream(request, model, tokenizer, device),
+            generate_stream(request, engine),
             media_type="text/event-stream",
         )
     else:
         # Non-streaming fallback
         torch.manual_seed(request.seed)
-        if device.startswith("cuda"):
+        if engine.device.startswith("cuda"):
             torch.cuda.manual_seed(request.seed)
 
         start_prompt = request.prompt if request.prompt else "\n"
-        start_ids = tokenizer.encode(start_prompt)
-        x = torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...]
+        start_ids = engine.tokenizer.encode(start_prompt)
+        x = torch.tensor(start_ids, dtype=torch.long, device=engine.device)[None, ...]
 
         ctx = (
             torch.autocast(
-                device_type=device,
+                device_type=engine.device,
                 dtype=torch.bfloat16
                 if torch.cuda.is_bf16_supported()
                 else torch.float16,
             )
-            if device.startswith("cuda")
+            if engine.device.startswith("cuda")
             else nullcontext()
         )
 
         with torch.no_grad():
             with ctx:
-                y = model.generate(
+                y = engine.model.generate(
                     x,
                     request.max_new_tokens,
                     temperature=request.temperature,
                     top_k=request.top_k,
                 )
 
-        output_text = tokenizer.decode(y[0].tolist())
+        output_text = engine.tokenizer.decode(y[0].tolist())
         return GenerateResponse(text=output_text[len(start_prompt) :])
 
 
