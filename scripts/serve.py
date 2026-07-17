@@ -6,6 +6,9 @@ import os
 import json
 import asyncio
 import logging
+import queue
+import threading
+import anyio
 import torch
 import torch.nn.functional as F
 from typing import AsyncGenerator
@@ -227,8 +230,6 @@ def get_semaphore(request: Request) -> asyncio.Semaphore:
     return request.app.state.generate_semaphore
 
 
-import queue
-import threading
 
 async def generate_stream(
     request: GenerateRequest, engine: InferenceEngine
@@ -266,7 +267,7 @@ async def health():
     return {"status": "ok"}
 
 
-import anyio
+
 
 async def stream_with_semaphore(generator: AsyncGenerator[str, None], sem: asyncio.Semaphore) -> AsyncGenerator[str, None]:
     try:
