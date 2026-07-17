@@ -92,6 +92,86 @@ class InferenceEngine:
         output_text = self.tokenizer.decode(y[0].tolist())
         return output_text[len(start_prompt) :]
 
+    def generate_stream_worker(
+        self, prompt: str, max_new_tokens: int, temperature: float, top_k: int, seed: int, q: queue.Queue
+    ):
+        try:
+            generator = torch.Generator(device=self.device)
+            generator.manual_seed(seed)
+
+            start_prompt = prompt if prompt else "\n"
+            start_ids = self.tokenizer.encode(start_prompt)
+            x = torch.tensor(start_ids, dtype=torch.long, device=self.device)[None, ...]
+
+            B, T = x.shape
+            if T > self.model.config.block_size:
+                x = x[:, -self.model.config.block_size :]
+                T = x.shape[1]
+
+            ctx = (
+                torch.autocast(
+                    device_type=self.device,
+                    dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
+                )
+                if self.device.startswith("cuda")
+                else nullcontext()
+            )
+
+            with torch.no_grad():
+                with ctx:
+                    # Initialize KV cache
+                    kv_caches = []
+                    for _ in self.model.blocks:
+                        cache_k = torch.zeros(
+                            (B, self.model.config.block_size, self.model.config.n_kv_head, self.model.config.n_embd // self.model.config.n_head),
+                            dtype=self.model.tok_emb.weight.dtype,
+                            device=self.device,
+                        )
+                        cache_v = torch.zeros_like(cache_k)
+                        kv_caches.append((cache_k, cache_v))
+
+                    logits, _, kv_caches = self.model(x, start_pos=0, kv_caches=kv_caches)
+
+                    next_token_logits = logits[:, -1, :] / temperature
+                    if top_k is not None:
+                        v, _ = torch.topk(
+                            next_token_logits, min(top_k, next_token_logits.size(-1))
+                        )
+                        next_token_logits[next_token_logits < v[:, [-1]]] = -float("Inf")
+                    probs = F.softmax(next_token_logits, dim=-1)
+                    idx_next = torch.multinomial(probs, num_samples=1, generator=generator)
+
+                    start_pos = T
+
+                    # Yield first token
+                    token_str = self.tokenizer.decode(idx_next[0].tolist())
+                    q.put(token_str)
+
+                    for _ in range(1, max_new_tokens):
+                        if start_pos >= self.model.config.block_size:
+                            break
+
+                        logits, _, kv_caches = self.model(idx_next, start_pos=start_pos, kv_caches=kv_caches)
+
+                        next_token_logits = logits[:, -1, :] / temperature
+                        if top_k is not None:
+                            v, _ = torch.topk(
+                                next_token_logits,
+                                min(top_k, next_token_logits.size(-1)),
+                            )
+                            next_token_logits[next_token_logits < v[:, [-1]]] = -float("Inf")
+                        probs = F.softmax(next_token_logits, dim=-1)
+                        idx_next = torch.multinomial(probs, num_samples=1, generator=generator)
+
+                        start_pos += 1
+
+                        token_str = self.tokenizer.decode(idx_next[0].tolist())
+                        q.put(token_str)
+        except Exception as e:
+            logger.error(f"Error during stream generation: {e}")
+        finally:
+            q.put(None)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -139,83 +219,31 @@ def get_engine(request: Request) -> InferenceEngine:
     return request.app.state.engine
 
 
+import queue
+import threading
+
 async def generate_stream(
     request: GenerateRequest, engine: InferenceEngine
 ) -> AsyncGenerator[str, None]:
-    torch.manual_seed(request.seed)
-    if engine.device.startswith("cuda"):
-        torch.cuda.manual_seed(request.seed)
-
-    start_prompt = request.prompt if request.prompt else "\n"
-    start_ids = engine.tokenizer.encode(start_prompt)
-    x = torch.tensor(start_ids, dtype=torch.long, device=engine.device)[None, ...]
-
-    B, T = x.shape
-    if T > engine.model.config.block_size:
-        x = x[:, -engine.model.config.block_size :]
-        T = x.shape[1]
-
-    ctx = (
-        torch.autocast(
-            device_type=engine.device,
-            dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
-        )
-        if engine.device.startswith("cuda")
-        else nullcontext()
+    q = queue.Queue()
+    thread = threading.Thread(
+        target=engine.generate_stream_worker,
+        args=(
+            request.prompt,
+            request.max_new_tokens,
+            request.temperature,
+            request.top_k,
+            request.seed,
+            q,
+        ),
     )
+    thread.start()
 
-    with torch.no_grad():
-        with ctx:
-            # Initialize KV cache
-            kv_caches = []
-            for _ in engine.model.blocks:
-                cache_k = torch.zeros(
-                    (B, engine.model.config.block_size, engine.model.config.n_kv_head, engine.model.config.n_embd // engine.model.config.n_head),
-                    dtype=engine.model.tok_emb.weight.dtype,
-                    device=engine.device,
-                )
-                cache_v = torch.zeros_like(cache_k)
-                kv_caches.append((cache_k, cache_v))
-
-            logits, _, kv_caches = engine.model(x, start_pos=0, kv_caches=kv_caches)
-
-            next_token_logits = logits[:, -1, :] / request.temperature
-            if request.top_k is not None:
-                v, _ = torch.topk(
-                    next_token_logits, min(request.top_k, next_token_logits.size(-1))
-                )
-                next_token_logits[next_token_logits < v[:, [-1]]] = -float("Inf")
-            probs = F.softmax(next_token_logits, dim=-1)
-            idx_next = torch.multinomial(probs, num_samples=1)
-
-            start_pos = T
-
-            # Yield first token
-            token_str = engine.tokenizer.decode(idx_next[0].tolist())
-            yield f"data: {json.dumps({'text': token_str})}\n\n"
-            await asyncio.sleep(0)
-
-            for _ in range(1, request.max_new_tokens):
-                if start_pos >= engine.model.config.block_size:
-                    break
-
-                logits, _, kv_caches = engine.model(idx_next, start_pos=start_pos, kv_caches=kv_caches)
-
-                next_token_logits = logits[:, -1, :] / request.temperature
-                if request.top_k is not None:
-                    v, _ = torch.topk(
-                        next_token_logits,
-                        min(request.top_k, next_token_logits.size(-1)),
-                    )
-                    next_token_logits[next_token_logits < v[:, [-1]]] = -float("Inf")
-                probs = F.softmax(next_token_logits, dim=-1)
-                idx_next = torch.multinomial(probs, num_samples=1)
-
-                start_pos += 1
-
-                token_str = engine.tokenizer.decode(idx_next[0].tolist())
-                yield f"data: {json.dumps({'text': token_str})}\n\n"
-                await asyncio.sleep(0)
+    while True:
+        token = await asyncio.to_thread(q.get)
+        if token is None:
+            break
+        yield f"data: {json.dumps({'text': token})}\n\n"
 
     yield "data: [DONE]\n\n"
 
