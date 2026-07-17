@@ -83,7 +83,7 @@ def test_causal_self_attention():
     x = torch.randn(2, seq_len, config.n_embd)
     freqs_cis = precompute_freqs_cis(config.n_embd // config.n_head, seq_len)
 
-    out = attn(x, freqs_cis)
+    out, _ = attn(x, freqs_cis)
 
     assert out.shape == x.shape
 
@@ -97,7 +97,7 @@ def test_block():
     x = torch.randn(2, seq_len, config.n_embd)
     freqs_cis = precompute_freqs_cis(config.n_embd // config.n_head, seq_len)
 
-    out = block(x, freqs_cis)
+    out, _ = block(x, freqs_cis)
     assert out.shape == x.shape
 
 
@@ -112,7 +112,7 @@ def test_gpt():
 
     # Test forward pass without targets
     idx = torch.randint(0, config.vocab_size, (2, 64))
-    logits, loss = model(idx)
+    logits, loss, _ = model(idx)
 
     # logits shape should be (B, 1, vocab_size) during inference
     assert logits.shape == (2, 1, config.vocab_size)
@@ -120,7 +120,7 @@ def test_gpt():
 
     # Test forward pass with targets
     targets = torch.randint(0, config.vocab_size, (2, 64))
-    logits, loss = model(idx, targets=targets)
+    logits, loss, _ = model(idx, targets=targets)
 
     # logits shape should be (B, T, vocab_size) during training
     assert logits.shape == (2, 64, config.vocab_size)
