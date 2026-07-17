@@ -28,6 +28,7 @@ class ServerSettings(BaseSettings):
     port: int = 8000
     model_dir: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "out")
     cors_origins: list[str] = ["*"]
+    max_concurrent_requests: int = 2
 
     class Config:
         env_file = ".env"
@@ -178,6 +179,7 @@ async def lifespan(app: FastAPI):
     # Setup
     engine = InferenceEngine(settings.model_dir)
     app.state.engine = engine
+    app.state.generate_semaphore = asyncio.Semaphore(settings.max_concurrent_requests)
     yield
     # Teardown
     logger.info("Shutting down server.")
@@ -217,6 +219,12 @@ def get_engine(request: Request) -> InferenceEngine:
     if not hasattr(request.app.state, "engine"):
         raise HTTPException(status_code=503, detail="Inference engine not loaded yet")
     return request.app.state.engine
+
+
+def get_semaphore(request: Request) -> asyncio.Semaphore:
+    if not hasattr(request.app.state, "generate_semaphore"):
+        raise HTTPException(status_code=503, detail="Semaphore not loaded yet")
+    return request.app.state.generate_semaphore
 
 
 import queue
@@ -260,27 +268,41 @@ async def health():
 
 import anyio
 
+async def stream_with_semaphore(generator: AsyncGenerator[str, None], sem: asyncio.Semaphore) -> AsyncGenerator[str, None]:
+    try:
+        async for chunk in generator:
+            yield chunk
+    finally:
+        sem.release()
+
+
 @app.post("/generate", response_model=GenerateResponse)
 async def generate_text(
     request: GenerateRequest,
     engine: InferenceEngine = Depends(get_engine),
+    semaphore: asyncio.Semaphore = Depends(get_semaphore),
 ):
+    await semaphore.acquire()
+
     if request.stream:
         return StreamingResponse(
-            generate_stream(request, engine),
+            stream_with_semaphore(generate_stream(request, engine), semaphore),
             media_type="text/event-stream",
         )
     else:
-        # Offload non-streaming inference to a background thread
-        output_text = await anyio.to_thread.run_sync(
-            engine.generate,
-            request.prompt,
-            request.max_new_tokens,
-            request.temperature,
-            request.top_k,
-            request.seed,
-        )
-        return GenerateResponse(text=output_text)
+        try:
+            # Offload non-streaming inference to a background thread
+            output_text = await anyio.to_thread.run_sync(
+                engine.generate,
+                request.prompt,
+                request.max_new_tokens,
+                request.temperature,
+                request.top_k,
+                request.seed,
+            )
+            return GenerateResponse(text=output_text)
+        finally:
+            semaphore.release()
 
 
 def main():
