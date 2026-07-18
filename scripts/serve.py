@@ -19,18 +19,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 from contextlib import asynccontextmanager, nullcontext
-from tiny_shakespeare_gpt.model import GPT, GPTConfig
 from tiny_shakespeare_gpt.tokenizer import BPETokenizer
+from tiny_shakespeare_gpt.utils import get_project_root, setup_logging, load_checkpoint
 
 # Setup logging
-logging.basicConfig(level=logging.INFO, format="%(levelname)s:\t  %(message)s")
-logger = logging.getLogger(__name__)
+logger = setup_logging(__name__)
 
 
 class ServerSettings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
-    model_dir: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "out")
+    model_dir: str = str(get_project_root() / "out")
     cors_origins: list[str] = ["*"]
     max_concurrent_requests: int = 2
 
@@ -46,28 +45,17 @@ class InferenceEngine:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info(f"Using device: {self.device}")
 
-        model_ckpt_path = os.path.join(model_dir, "model.safetensors")
-        meta_ckpt_path = os.path.join(model_dir, "ckpt_meta.pt")
+        from pathlib import Path
+        model_dir_path = Path(model_dir)
 
-        if not os.path.exists(model_ckpt_path) or not os.path.exists(meta_ckpt_path):
-            raise RuntimeError(
-                f"Checkpoint not found at {model_ckpt_path} or {meta_ckpt_path}. Run scripts/train.py first."
-            )
-
-        torch.serialization.add_safe_globals([GPTConfig])
-        meta = torch.load(meta_ckpt_path, map_location=self.device, weights_only=True)
-
-        config = meta["config"]
-        self.model = GPT(config)
-
-        import safetensors.torch
-
-        safetensors.torch.load_model(self.model, model_ckpt_path)
-        self.model.eval()
-        self.model.to(self.device)
+        try:
+            self.model, _ = load_checkpoint(self.device, model_dir_path)
+            logger.info("Model loaded successfully.")
+        except FileNotFoundError as e:
+            raise RuntimeError(str(e))
 
         self.tokenizer = BPETokenizer()
-        logger.info("Model and tokenizer loaded successfully.")
+        logger.info("Tokenizer loaded successfully.")
 
     def generate(
         self,
@@ -238,7 +226,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
+static_dir = str(get_project_root() / "static")
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 

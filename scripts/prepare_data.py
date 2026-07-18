@@ -2,24 +2,25 @@
 Prepares the dataset by tokenizing the raw text and saving it to binary files.
 """
 
-import os
 import numpy as np
 from tiny_shakespeare_gpt.tokenizer import BPETokenizer
-
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-INPUT_FILE = os.path.join(DATA_DIR, "input.txt")
-TRAIN_FILE = os.path.join(DATA_DIR, "train.bin")
-VAL_FILE = os.path.join(DATA_DIR, "val.bin")
+from tiny_shakespeare_gpt.utils import get_project_root, setup_logging
 
 
 def main():
-    if not os.path.exists(INPUT_FILE):
+    logger = setup_logging(__name__)
+    
+    data_dir = get_project_root() / "data"
+    input_file = data_dir / "input.txt"
+    train_file = data_dir / "train.bin"
+    val_file = data_dir / "val.bin"
+
+    if not input_file.exists():
         raise FileNotFoundError(
-            f"Dataset not found at {INPUT_FILE}. Run download_dataset.py first."
+            f"Dataset not found at {input_file}. Run download_dataset.py first."
         )
 
-    with open(INPUT_FILE, "r", encoding="utf-8") as f:
-        text = f.read()
+    text = input_file.read_text(encoding="utf-8")
 
     # Split data: 90% train, 10% validation
     n = len(text)
@@ -28,23 +29,23 @@ def main():
 
     tokenizer = BPETokenizer()
 
-    print("Encoding training data...")
+    logger.info("Encoding training data...")
     train_ids = tokenizer.encode(train_text)
-    print(f"Train tokens: {len(train_ids):,}")
+    logger.info(f"Train tokens: {len(train_ids):,}")
 
-    print("Encoding validation data...")
+    logger.info("Encoding validation data...")
     val_ids = tokenizer.encode(val_text)
-    print(f"Validation tokens: {len(val_ids):,}")
+    logger.info(f"Validation tokens: {len(val_ids):,}")
 
     # Export to binary files
     # o200k_base vocab size is ~200k, so uint32 is required
     train_arr = np.array(train_ids, dtype=np.uint32)
     val_arr = np.array(val_ids, dtype=np.uint32)
 
-    train_arr.tofile(TRAIN_FILE)
-    val_arr.tofile(VAL_FILE)
+    train_arr.tofile(train_file)
+    val_arr.tofile(val_file)
 
-    print(f"Saved {TRAIN_FILE} and {VAL_FILE}")
+    logger.info(f"Saved {train_file} and {val_file}")
 
 
 if __name__ == "__main__":

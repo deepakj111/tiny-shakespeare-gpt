@@ -2,15 +2,15 @@
 Script to generate text using a trained GPT model checkpoint.
 """
 
-import os
+import argparse
 import torch
-from tiny_shakespeare_gpt.model import GPT, GPTConfig
+from contextlib import nullcontext
+
 from tiny_shakespeare_gpt.tokenizer import BPETokenizer
+from tiny_shakespeare_gpt.utils import get_project_root, load_checkpoint, set_seed, setup_logging
 
 
 def main():
-    import argparse
-
     parser = argparse.ArgumentParser(
         description="Generate text using trained GPT model."
     )
@@ -29,58 +29,39 @@ def main():
     parser.add_argument("--seed", type=int, default=1337, help="Random seed")
     args = parser.parse_args()
 
-    start_prompt = args.prompt
-    max_new_tokens = args.max_new_tokens
-    temperature = args.temperature
-    top_k = args.top_k
-    seed = args.seed
+    logger = setup_logging(__name__)
 
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
+    set_seed(args.seed)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
+    logger.info(f"Using device: {device}")
 
     # Load checkpoint
-    out_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "out")
-    model_ckpt_path = os.path.join(out_dir, "model.safetensors")
-    meta_ckpt_path = os.path.join(out_dir, "ckpt_meta.pt")
-
-    if not os.path.exists(model_ckpt_path) or not os.path.exists(meta_ckpt_path):
-        print(f"Error: Checkpoint not found at {model_ckpt_path} or {meta_ckpt_path}")
-        print("Please run scripts/train.py first.")
+    out_dir = get_project_root() / "out"
+    
+    try:
+        model, meta = load_checkpoint(device, out_dir)
+        logger.info(f"Loading checkpoint from {out_dir}")
+    except FileNotFoundError as e:
+        logger.error(str(e))
         return
 
-    print(f"Loading checkpoint from {model_ckpt_path} and {meta_ckpt_path}")
-    torch.serialization.add_safe_globals([GPTConfig])
-    meta = torch.load(meta_ckpt_path, map_location=device, weights_only=True)
-
-    # Initialize model from checkpoint config
-    config = meta["config"]
-    model = GPT(config)
-
-    # Load weights
-    import safetensors.torch
-
-    safetensors.torch.load_model(model, model_ckpt_path)
     model.eval()
-    model.to(device)
 
     # Initialize tokenizer
     tokenizer = BPETokenizer()
 
+    start_prompt = args.prompt
     # Encode prompt
     if start_prompt == "":
-        # if empty prompt, generate from the <|endoftext|> token equivalent or simply an empty start
-        # since we don't have a specific SOS token in basic GPT-2 vocab, a newline or space is commonly used
         start_prompt = "\n"
 
     start_ids = tokenizer.encode(start_prompt)
     x = torch.tensor(start_ids, dtype=torch.long, device=device)[None, ...]
 
     # Generate
-    print(f"\n--- Generating {max_new_tokens} tokens ---\n")
-    print(start_prompt, end="")
+    logger.info(f"Generating {args.max_new_tokens} tokens...")
+    print(start_prompt, end="", flush=True)
 
     with torch.no_grad():
         with (
@@ -93,16 +74,13 @@ def main():
             if device == "cuda"
             else nullcontext()
         ):
-            y = model.generate(x, max_new_tokens, temperature=temperature, top_k=top_k)
+            y = model.generate(x, args.max_new_tokens, temperature=args.temperature, top_k=args.top_k)
 
     # Decode and print output
-    # y[0] gets the sequence from batch dim
     output_text = tokenizer.decode(y[0].tolist())
     print(output_text[len(start_prompt) :])
-    print("\n--- Generation Complete ---")
+    logger.info("Generation Complete")
 
 
 if __name__ == "__main__":
-    from contextlib import nullcontext
-
     main()

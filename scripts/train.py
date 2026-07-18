@@ -2,17 +2,15 @@
 Training script for the GPT model.
 """
 
-import os
 import time
 import math
-import logging
 from contextlib import nullcontext
 import torch
 import wandb
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group
+from torch.distributed import destroy_process_group
 from torch.utils.data.distributed import DistributedSampler
 import safetensors.torch
 
@@ -20,13 +18,10 @@ from tiny_shakespeare_gpt.model import GPT, GPTConfig
 from tiny_shakespeare_gpt.dataset import MemmapTokenDataset
 from tiny_shakespeare_gpt.config import TrainConfig
 from tiny_shakespeare_gpt.tokenizer import BPETokenizer
+from tiny_shakespeare_gpt.utils import get_project_root, setup_logging, setup_ddp
 
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    level=logging.INFO,
-)
-logger = logging.getLogger(__name__)
+logger = setup_logging(__name__)
+
 
 
 def get_batch(loader_iter, loader, ddp, sampler, epoch):
@@ -98,34 +93,13 @@ def main():
     train_config = TrainConfig()
 
     # DDP Setup
-    ddp = int(os.environ.get("RANK", -1)) != -1
-    if ddp:
-        ddp_local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
-        # Fallback to CPU/gloo if we are simulating multiple processes on fewer GPUs
-        if (
-            torch.cuda.is_available()
-            and torch.cuda.device_count() >= ddp_local_world_size
-        ):
-            backend = "nccl"
-        else:
-            backend = "gloo"
-
-        init_process_group(backend=backend)
-        ddp_rank = int(os.environ["RANK"])
-        ddp_local_rank = int(os.environ["LOCAL_RANK"])
-        ddp_world_size = int(os.environ["WORLD_SIZE"])
-
-        if backend == "nccl":
-            device = f"cuda:{ddp_local_rank}"
-            torch.cuda.set_device(device)
-        else:
-            device = "cpu"
-        master_process = ddp_rank == 0
-    else:
-        master_process = True
-        ddp_rank = 0
-        ddp_world_size = 1
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+    ddp_info = setup_ddp()
+    ddp = ddp_info["ddp"]
+    device = ddp_info["device"]
+    master_process = ddp_info["master_process"]
+    ddp_rank = ddp_info["ddp_rank"]
+    ddp_local_rank = ddp_info["ddp_local_rank"]
+    ddp_world_size = ddp_info["ddp_world_size"]
 
     if master_process and train_config.wandb_log:
         wandb.init(project=train_config.wandb_project, config=train_config.__dict__)
@@ -153,19 +127,19 @@ def main():
         logger.info(f"Using device: {device}, dtype: {dtype}, DDP: {ddp}")
 
     # Dataset
-    data_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-    train_data_path = os.path.join(data_dir, "train.bin")
-    val_data_path = os.path.join(data_dir, "val.bin")
+    data_dir = get_project_root() / "data"
+    train_data_path = data_dir / "train.bin"
+    val_data_path = data_dir / "val.bin"
 
-    if not os.path.exists(train_data_path) or not os.path.exists(val_data_path):
+    if not train_data_path.exists() or not val_data_path.exists():
         if master_process:
             logger.error("Data not found. Please run scripts/prepare_data.py first.")
         if ddp:
             destroy_process_group()
         return
 
-    train_dataset = MemmapTokenDataset(train_data_path, train_config.block_size)
-    val_dataset = MemmapTokenDataset(val_data_path, train_config.block_size)
+    train_dataset = MemmapTokenDataset(str(train_data_path), train_config.block_size)
+    val_dataset = MemmapTokenDataset(str(val_data_path), train_config.block_size)
     tokenizer = BPETokenizer()
 
     if ddp:
@@ -242,17 +216,17 @@ def main():
     best_val_loss = float("inf")
     start_step = 0
     epoch = 0
-    out_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "out")
+    out_dir = get_project_root() / "out"
     if master_process:
-        os.makedirs(out_dir, exist_ok=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
 
-    model_ckpt_path = os.path.join(out_dir, "model.safetensors")
-    meta_ckpt_path = os.path.join(out_dir, "ckpt_meta.pt")
+    model_ckpt_path = out_dir / "model.safetensors"
+    meta_ckpt_path = out_dir / "ckpt_meta.pt"
 
     if (
         train_config.resume
-        and os.path.exists(model_ckpt_path)
-        and os.path.exists(meta_ckpt_path)
+        and model_ckpt_path.exists()
+        and meta_ckpt_path.exists()
     ):
         if master_process:
             logger.info(
@@ -260,7 +234,7 @@ def main():
             )
 
         # Load model weights via safetensors
-        safetensors.torch.load_model(raw_model, model_ckpt_path)
+        safetensors.torch.load_model(raw_model, str(model_ckpt_path))
 
         # Load metadata and optimizer state via standard PyTorch
         torch.serialization.add_safe_globals([GPTConfig])
@@ -341,8 +315,8 @@ def main():
 
                 if losses["val"] < best_val_loss:
                     best_val_loss = losses["val"]
-                    model_ckpt_path = os.path.join(out_dir, "model.safetensors")
-                    meta_ckpt_path = os.path.join(out_dir, "ckpt_meta.pt")
+                    model_ckpt_path = out_dir / "model.safetensors"
+                    meta_ckpt_path = out_dir / "ckpt_meta.pt"
 
                     # Save model weights via safetensors
                     model_to_save = (
@@ -350,7 +324,7 @@ def main():
                         if hasattr(raw_model, "_orig_mod")
                         else raw_model
                     )
-                    safetensors.torch.save_model(model_to_save, model_ckpt_path)
+                    safetensors.torch.save_model(model_to_save, str(model_ckpt_path))
 
                     # Save training state via torch.save
                     meta = {
@@ -362,7 +336,7 @@ def main():
                     }
                     if device.startswith("cuda"):
                         meta["cuda_rng_state"] = torch.cuda.get_rng_state()
-                    torch.save(meta, meta_ckpt_path)
+                    torch.save(meta, str(meta_ckpt_path))
                     logger.info(
                         f"Saved new best model with val loss {best_val_loss:.4f} to {model_ckpt_path}"
                     )
@@ -410,8 +384,8 @@ def main():
         plt.title("Training and Validation Loss Curve")
         plt.legend()
         plt.grid(True)
-        loss_curve_path = os.path.join(out_dir, "loss_curve.png")
-        plt.savefig(loss_curve_path)
+        loss_curve_path = out_dir / "loss_curve.png"
+        plt.savefig(str(loss_curve_path))
         plt.close()
 
         total_params = sum(p.numel() for p in raw_model.parameters())
@@ -460,9 +434,8 @@ def main():
         for step_num, text in sample_outputs:
             report_md += f"\n### Step {step_num}\n```text\n{text}\n```\n"
 
-        report_path = os.path.join(out_dir, "training_report.md")
-        with open(report_path, "w") as f:
-            f.write(report_md)
+        report_path = out_dir / "training_report.md"
+        report_path.write_text(report_md)
         logger.info(f"Training report saved to {report_path}")
 
         if train_config.wandb_log:
