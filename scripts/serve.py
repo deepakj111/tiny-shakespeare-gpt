@@ -5,7 +5,6 @@ FastAPI Server to serve the GPT model.
 import os
 import json
 import asyncio
-import logging
 import queue
 import threading
 import anyio
