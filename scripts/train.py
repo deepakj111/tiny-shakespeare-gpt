@@ -23,7 +23,6 @@ from tiny_shakespeare_gpt.utils import get_project_root, setup_logging, setup_dd
 logger = setup_logging(__name__)
 
 
-
 def get_batch(loader_iter, loader, ddp, sampler, epoch):
     try:
         x, y = next(loader_iter)
@@ -223,11 +222,7 @@ def main():
     model_ckpt_path = out_dir / "model.safetensors"
     meta_ckpt_path = out_dir / "ckpt_meta.pt"
 
-    if (
-        train_config.resume
-        and model_ckpt_path.exists()
-        and meta_ckpt_path.exists()
-    ):
+    if train_config.resume and model_ckpt_path.exists() and meta_ckpt_path.exists():
         if master_process:
             logger.info(
                 f"Resuming from checkpoint {model_ckpt_path} and {meta_ckpt_path}"

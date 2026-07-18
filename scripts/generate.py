@@ -7,7 +7,12 @@ import torch
 from contextlib import nullcontext
 
 from tiny_shakespeare_gpt.tokenizer import BPETokenizer
-from tiny_shakespeare_gpt.utils import get_project_root, load_checkpoint, set_seed, setup_logging
+from tiny_shakespeare_gpt.utils import (
+    get_project_root,
+    load_checkpoint,
+    set_seed,
+    setup_logging,
+)
 
 
 def main():
@@ -38,7 +43,7 @@ def main():
 
     # Load checkpoint
     out_dir = get_project_root() / "out"
-    
+
     try:
         model, meta = load_checkpoint(device, out_dir)
         logger.info(f"Loading checkpoint from {out_dir}")
@@ -74,7 +79,9 @@ def main():
             if device == "cuda"
             else nullcontext()
         ):
-            y = model.generate(x, args.max_new_tokens, temperature=args.temperature, top_k=args.top_k)
+            y = model.generate(
+                x, args.max_new_tokens, temperature=args.temperature, top_k=args.top_k
+            )
 
     # Decode and print output
     output_text = tokenizer.decode(y[0].tolist())

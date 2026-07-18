@@ -45,6 +45,7 @@ class InferenceEngine:
         logger.info(f"Using device: {self.device}")
 
         from pathlib import Path
+
         model_dir_path = Path(model_dir)
 
         try:

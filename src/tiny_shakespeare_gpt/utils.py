@@ -11,26 +11,29 @@ from torch.distributed import init_process_group
 
 from tiny_shakespeare_gpt.model import GPT, GPTConfig
 
+
 def setup_logging(name: str, level: int = logging.INFO) -> logging.Logger:
     """Setup a standard logger."""
     logger = logging.getLogger(name)
     logger.setLevel(level)
-    
+
     # Avoid duplicate logs
     if not logger.handlers:
         handler = logging.StreamHandler()
         formatter = logging.Formatter(
             "%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S"
+            datefmt="%Y-%m-%d %H:%M:%S",
         )
         handler.setFormatter(formatter)
         logger.addHandler(handler)
-        
+
     return logger
+
 
 def get_project_root() -> Path:
     """Get the absolute path to the project root directory."""
     return Path(__file__).resolve().parent.parent.parent
+
 
 def setup_ddp() -> dict:
     """
@@ -40,7 +43,10 @@ def setup_ddp() -> dict:
     ddp = int(os.environ.get("RANK", -1)) != -1
     if ddp:
         ddp_local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
-        if torch.cuda.is_available() and torch.cuda.device_count() >= ddp_local_world_size:
+        if (
+            torch.cuda.is_available()
+            and torch.cuda.device_count() >= ddp_local_world_size
+        ):
             backend = "nccl"
         else:
             backend = "gloo"
@@ -62,7 +68,7 @@ def setup_ddp() -> dict:
         ddp_local_rank = 0
         ddp_world_size = 1
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        
+
     return {
         "ddp": ddp,
         "device": device,
@@ -71,6 +77,7 @@ def setup_ddp() -> dict:
         "ddp_local_rank": ddp_local_rank,
         "ddp_world_size": ddp_world_size,
     }
+
 
 def load_checkpoint(device: str, model_dir: Path) -> tuple[GPT, dict]:
     """
@@ -93,8 +100,9 @@ def load_checkpoint(device: str, model_dir: Path) -> tuple[GPT, dict]:
 
     safetensors.torch.load_model(model, str(model_ckpt_path))
     model.to(device)
-    
+
     return model, meta
+
 
 def set_seed(seed: int):
     """Set random seed for reproducibility."""

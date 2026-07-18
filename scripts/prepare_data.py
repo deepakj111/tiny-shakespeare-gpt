@@ -9,7 +9,7 @@ from tiny_shakespeare_gpt.utils import get_project_root, setup_logging
 
 def main():
     logger = setup_logging(__name__)
-    
+
     data_dir = get_project_root() / "data"
     input_file = data_dir / "input.txt"
     train_file = data_dir / "train.bin"

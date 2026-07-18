@@ -10,7 +10,7 @@ DATA_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tiny
 
 def main():
     logger = setup_logging(__name__)
-    
+
     data_dir = get_project_root() / "data"
     output_file = data_dir / "input.txt"
 
