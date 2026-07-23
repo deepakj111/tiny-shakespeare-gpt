@@ -4,6 +4,8 @@ Training script for the GPT model.
 
 import time
 import math
+import argparse
+import dataclasses
 from contextlib import nullcontext
 import torch
 import wandb
@@ -21,6 +23,41 @@ from tiny_shakespeare_gpt.tokenizer import BPETokenizer
 from tiny_shakespeare_gpt.utils import get_project_root, setup_logging, setup_ddp
 
 logger = setup_logging(__name__)
+
+
+def parse_args_into_config(config: TrainConfig) -> TrainConfig:
+    parser = argparse.ArgumentParser(description="Train GPT model")
+
+    for field in dataclasses.fields(config):
+        arg_name = f"--{field.name}"
+        if field.type is bool:
+            group = parser.add_mutually_exclusive_group()
+            group.add_argument(
+                arg_name,
+                action="store_true",
+                default=field.default,
+                help=f"Enable {field.name}",
+            )
+            group.add_argument(
+                f"--no-{field.name}",
+                dest=field.name,
+                action="store_false",
+                help=f"Disable {field.name}",
+            )
+        else:
+            parser.add_argument(
+                arg_name,
+                type=field.type,
+                default=field.default,
+                help=f"{field.name} (default: {field.default})",
+            )
+
+    args = parser.parse_args()
+
+    for field in dataclasses.fields(config):
+        setattr(config, field.name, getattr(args, field.name))
+
+    return config
 
 
 def get_batch(loader_iter, loader, ddp, sampler, epoch):
@@ -90,6 +127,7 @@ def get_lr(it, train_config):
 
 def main():
     train_config = TrainConfig()
+    train_config = parse_args_into_config(train_config)
 
     # DDP Setup
     ddp_info = setup_ddp()
