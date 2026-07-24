@@ -1,6 +1,37 @@
 # Tiny Shakespeare GPT
 
-Building and training a GPT model from scratch using PyTorch on the tiny shakespeare dataset.
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.1+-ee4c2c.svg)](https://pytorch.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688.svg)](https://fastapi.tiangolo.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+> **A modern, pedagogical implementation of a GPT model from scratch, incorporating state-of-the-art techniques from LLaMA and Mixtral (RoPE, GQA, and Sparse MoE).**
+
+This project demonstrates the end-to-end process of building, training, and deploying a Generative Pre-trained Transformer (GPT) on the Tiny Shakespeare dataset. It serves as an educational portfolio piece showcasing advanced deep learning architecture, multi-GPU distributed training, and production-ready API serving.
+
+### Key Skills Demonstrated
+- **Deep Learning Architecture**: Implementation of modern LLM components (Rotary Position Embeddings, Grouped-Query Attention, Sparse Mixture of Experts, SwiGLU).
+- **Distributed Systems**: Multi-GPU scaling using PyTorch Distributed Data Parallel (DDP).
+- **MLOps & Tracking**: Experiment tracking with Weights & Biases (W&B) and automated checkpoint resumability.
+- **API Development**: High-performance, streaming REST API built with FastAPI and Server-Sent Events (SSE).
+- **Environment Management**: Reproducible dependency management via `uv` and containerization with Docker.
+
+---
+
+### Example Output
+After training, the model generates structurally coherent Shakespearean text:
+```text
+ROMEO:
+I am not so, but in a man
+To be a man of a man that is not a word
+That we have been to the world.
+
+JULIET:
+I have no more to say, and the word
+And say to the world, and we have been a man.
+```
+
+---
 
 ## Requirements & Setup
 

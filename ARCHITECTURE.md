@@ -1,6 +1,10 @@
 # Architecture Details
 
-This document outlines the design decisions and architectural components used in the `tiny_shakespeare_gpt` model. The model is built from scratch in PyTorch and incorporates several proven techniques from recent large language models to maximize efficiency and stability.
+> **Design Philosophy**: The `tiny_shakespeare_gpt` architecture is designed to bridge the gap between educational simplicity and modern production realities. While classic tutorials implement the standard GPT-2 architecture, this project replaces legacy components with state-of-the-art techniques used in models like **LLaMA 3** and **Mixtral**. The goal is to provide a pedagogical but highly optimized model that scales efficiently and trains rapidly.
+
+This document outlines the design decisions, mathematical underpinnings, and performance optimizations built into the model.
+
+---
 
 ## Core Components
 

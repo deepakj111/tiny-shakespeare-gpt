@@ -1,5 +1,6 @@
 """
 FastAPI Server to serve the GPT model.
+Provides a REST API and Server-Sent Events (SSE) streaming endpoint for real-time text generation.
 """
 
 import os

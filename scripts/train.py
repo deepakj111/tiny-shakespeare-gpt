@@ -1,5 +1,7 @@
 """
 Training script for the GPT model.
+Supports multi-GPU Distributed Data Parallel (DDP) training, gradient accumulation,
+mixed-precision (bfloat16/float16) training, and checkpoint resumability.
 """
 
 import time

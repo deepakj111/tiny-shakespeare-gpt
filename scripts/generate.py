@@ -1,5 +1,6 @@
 """
 Script to generate text using a trained GPT model checkpoint.
+Supports customizing max_new_tokens, temperature, and top_k sampling.
 """
 
 import argparse
